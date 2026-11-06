@@ -372,12 +372,28 @@ class Memory:
         self.load()
 
     def load(self):
-        if os.path.exists(self.path):
-            try:
-                with open(self.path,"r",encoding="utf-8") as f:
-                    self.state = json.load(f)
-            except Exception:
-                self.state = {"sessions": []}
+        """Load known session history or fail closed; never erase unreadable memory.
+
+        An interrupted/corrupt state is evidence to preserve for owner recovery.
+        Only a genuinely absent file starts a new history.
+        See DEV_NOTES.md (memory integrity decision).
+        """
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+        except FileNotFoundError:
+            return  # First launch: no prior history to protect.
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "Cannot read Velisaria memory state at {!r}; file left unchanged. "
+                "Back it up and repair/restore it before starting.".format(self.path)
+            ) from exc
+        if not isinstance(loaded, dict) or not isinstance(loaded.get("sessions"), list):
+            raise ValueError(
+                "Invalid Velisaria memory format at {!r}; file left unchanged. "
+                "Expected an object with a sessions list.".format(self.path)
+            )
+        self.state = loaded
 
     def save(self):
         tmp = self.path + ".tmp"
