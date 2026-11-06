@@ -4,7 +4,7 @@
 
 **Status:** historical Velisara Covenant v1.0 remains unchanged. The smaller `sanctified_monolith.py` has a **proposed, unreleased memory-integrity maintenance candidate** on `noe/portfolio-velisaria-memory-integrity`; it is not a versioned release.
 
-**Current goal:** protect existing local session history when a state file is truncated, malformed or unreadable at startup. **Latest change:** fail closed with an explicit recovery message instead of quietly resetting sessions. **Next priorities:** (1) validate exact PR head under Python 3.11/3.12; (2) test on a trusted Pythonista/iPhone; (3) consider separate, non-destructive crash recovery for `.tmp` after evidence. **Blocker:** no trusted target-device or real-user recovery evidence. [Changelog](./CHANGELOG.md) · [Tests](./tests/test_memory_integrity.py).
+**Current goal:** protect existing local session history when a state file is truncated, malformed or unreadable at startup. **Latest change:** fail closed with an explicit recovery message instead of quietly resetting sessions. **Next priorities:** (1) confirm final PR-head CI and review before integration; (2) test on a trusted Pythonista/iPhone; (3) consider separate, non-destructive crash recovery for `.tmp` after evidence. **Blocker:** no trusted target-device or real-user recovery evidence. [Changelog](./CHANGELOG.md) · [Tests](./tests/test_memory_integrity.py).
 
 ## What was verified in original source (main e311e1b)
 
