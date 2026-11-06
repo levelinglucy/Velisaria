@@ -12,7 +12,7 @@
 
 **Compatibility:** invalid pre-existing files now prevent startup until repaired; callers that assumed silent fallback must handle the exception. No automatic migration/recovery, auto-clearing or modification to archived monoliths.
 
-**Validation:** synthetic isolated unit/subprocess checks added. Final GitHub Actions evidence should be recorded after the exact candidate revision completes; until then the candidate is not verified. Power-cut and actual Pythonista/iPhone semantics not yet tested.
+**Validation:** seven isolated synthetic tests, including real subprocess CLI and byte-identical malformed-state preservation, passed on BOTH Python 3.11 and 3.12 in [CI run 42311924735](https://github.com/levelinglucy/Velisaria/actions/runs/42311924735) at candidate commit `5306bcd9`. Subsequent documentation-only updates require the latest head check before integration. Power-cut and actual Pythonista/iPhone semantics not yet tested.
 
 **Rollback:** preserve the complete damaged file and possible `.tmp` evidence. Reverting the loader without repairing corrupted data can trigger the original silent data-loss behaviour. No stable tag or published release.
 
