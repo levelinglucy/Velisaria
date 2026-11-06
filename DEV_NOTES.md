@@ -2,9 +2,9 @@
 
 ## Development summary
 
-**Status:** historical Velisara Covenant v1.0 remains unchanged. The smaller `sanctified_monolith.py` has a **proposed, unreleased memory-integrity maintenance candidate** on `noe/portfolio-velisaria-memory-integrity`; it is not a versioned release.
+**Status:** historical Velisara Covenant v1.0 remains unchanged. The smaller `sanctified_monolith.py` now has an **integrated, untagged memory-integrity maintenance candidate** on main via [PR #1](https://github.com/levelinglucy/Velisaria/pull/1), merge `fdbe2494`; it is not a versioned stable release.
 
-**Current goal:** protect existing local session history when a state file is truncated, malformed or unreadable at startup. **Latest change:** fail closed with an explicit recovery message instead of quietly resetting sessions. **Next priorities:** (1) confirm final PR-head CI and review before integration; (2) test on a trusted Pythonista/iPhone; (3) consider separate, non-destructive crash recovery for `.tmp` after evidence. **Blocker:** no trusted target-device or real-user recovery evidence. [Changelog](./CHANGELOG.md) · [Tests](./tests/test_memory_integrity.py).
+**Current goal:** protect existing local session history when a state file is truncated, malformed or unreadable at startup. **Latest change:** fail closed with an explicit recovery message instead of quietly resetting sessions. **Next priorities:** (1) verify merged-main CI; (2) test on a trusted Pythonista/iPhone; (3) consider separate, non-destructive crash recovery for `.tmp` after evidence. **Blocker:** no trusted target-device or real-user recovery evidence. [Changelog](./CHANGELOG.md) · [Tests](./tests/test_memory_integrity.py).
 
 ## What was verified in original source (main e311e1b)
 
@@ -41,10 +41,10 @@ Send a JSON line such as `{"user":"demo","text":"hello"}` then `/quit`. Avoid us
 
 ## Milestone / release gates
 
-- **M1 (candidate):** non-destructive refusal on malformed state + isolated synthetic CLI tests. Accept only when all tests pass on supported CI Python versions and PR head is verified.
+- **M1 (integrated candidate):** non-destructive refusal on malformed state + isolated synthetic CLI tests. Seven tests passed on Python 3.11 and 3.12 at the final PR head and merged-main candidate (CI [42312031091](https://github.com/levelinglucy/Velisaria/actions/runs/42312031091), [42312078957](https://github.com/levelinglucy/Velisaria/actions/runs/42312078957)).
 - **M2 (verification):** trusted Pythonista device and interrupted-write exercises on disposable files, preserving prior state and showing a recoverable failure.
 - **Stable:** only after actual target-device checks and an explicit release decision. No tag, release or migration is claimed now.
 
 ## Continuation
 
-First inspect branch/PR head and CI. If M1 green, record actual validation and consider merging the narrowly scoped change if safe and current, but preserve the original covenant and large archive files. Otherwise repair the exact reported regression before expanding scope. Then investigate `.tmp` retention and safe snapshot recovery using synthetic data. Do not promise deterministic replay: `MotionForge._seed` uses Python's process-randomized `hash(text)` and requires an independent decision.
+First inspect merged-main head and CI. M1 is merged; leave it alone absent a new regression, preserving the original covenant and large archive files. If a later test fails, repair that exact regression before expanding scope. Then investigate `.tmp` retention and safe snapshot recovery using synthetic data. Do not promise deterministic replay: `MotionForge._seed` uses Python's process-randomized `hash(text)` and requires an independent decision.
