@@ -29,6 +29,6 @@ This Covenant is not enforceable by law. It is enforceable by honor.
 
 **Current source status:** proposed memory-integrity maintenance candidate; the original **Velisara Covenant v1.0 above is unchanged**, and no new version has been released. This entry concerns only `sanctified_monolith.py`, not the historic archived monoliths.
 
-**Latest candidate:** protect session history when an existing state file is damaged; previously, startup silently reset history and the next message could overwrite it. **Next:** Python 3.11/3.12 smoke validation; trusted Pythonista/iPhone testing; then a copy-based interrupted-save recovery experiment. **Material limitation:** automatic state repair and real power-loss behaviour remain unverified. Do not use an older loader on an unreadable state file.
+**Latest candidate:** protect session history when an existing state file is damaged; previously, startup silently reset history and the next message could overwrite it. **Validation:** seven synthetic tests passed on Python 3.11/3.12 in [CI run 42311924735](https://github.com/levelinglucy/Velisaria/actions/runs/42311924735); final head check before integration. **Next:** trusted Pythonista/iPhone testing; then a copy-based interrupted-save recovery experiment. **Material limitation:** automatic state repair and real power-loss behaviour remain unverified. Do not use an older loader on an unreadable state file.
 
 [Developer notes and decision](./DEV_NOTES.md) · [Change history](./CHANGELOG.md) · [Synthetic tests](./tests/test_memory_integrity.py)
