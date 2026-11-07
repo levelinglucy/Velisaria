@@ -3,7 +3,7 @@
 Development summary (2026-11-06): detect and prevent silent loss of session
 history during startup after a truncated, unreadable, or malformed state file.
 Runs with Python stdlib only; does not access a user's actual history.
-Next: verify on Pythonista and test interruption around state-file replacement.
+Next: validate fail-closed handling of interrupted saves and test on Pythonista.
 See DEV_NOTES.md and CHANGELOG.md.
 """
 import hashlib
@@ -104,6 +104,96 @@ class MemoryIntegrityTests(unittest.TestCase):
             self.assertTrue(response["ok"])
             self.assertEqual(response["snapshot"]["memory"]["sessions"], 1)
             self.assertEqual(len(json.loads((pathlib.Path(d) / "sanctified_state.json").read_text())["sessions"]), 1)
+
+
+
+class InterruptedSaveTests(unittest.TestCase):
+    """Disposable state only: test exceptions and actual process termination before rename."""
+
+    def test_existing_primary_with_orphan_temp_preserves_both(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            old = b'{"sessions": [{"marker": "committed"}]}'
+            recovery = b'{"sessions": [{"marker": "uncommitted"}]}'
+            path.write_bytes(old)
+            pathlib.Path(str(path) + ".tmp").write_bytes(recovery)
+            with self.assertRaisesRegex(RuntimeError, "temporary"):
+                mod.Memory(str(path))
+            self.assertEqual(path.read_bytes(), old)
+            self.assertEqual(pathlib.Path(str(path) + ".tmp").read_bytes(), recovery)
+
+    def test_missing_primary_with_orphan_temp_is_not_treated_as_new(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            recovery = b'{"sessions": [{"marker": "uncommitted"}]}'
+            pathlib.Path(str(path) + ".tmp").write_bytes(recovery)
+            with self.assertRaisesRegex(RuntimeError, "temporary"):
+                mod.Memory(str(path))
+            self.assertFalse(path.exists())
+            self.assertEqual(pathlib.Path(str(path) + ".tmp").read_bytes(), recovery)
+
+    def test_replace_failure_keeps_primary_and_temp_for_owner(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            old = b'{"sessions": [{"marker": "previous"}]}'
+            path.write_bytes(old)
+            memory = mod.Memory(str(path))
+            memory.state["sessions"].append({"marker": "new"})
+            with mock.patch.object(mod.os, "replace", side_effect=OSError("synthetic replace failure")):
+                with self.assertRaisesRegex(OSError, "synthetic replace failure"):
+                    memory.save()
+            tmp = pathlib.Path(str(path) + ".tmp")
+            self.assertEqual(path.read_bytes(), old)
+            self.assertEqual(len(json.loads(tmp.read_text(encoding="utf-8"))["sessions"]), 2)
+            with self.assertRaisesRegex(RuntimeError, "temporary"):
+                mod.Memory(str(path))
+
+    def test_save_refuses_to_overwrite_preexisting_temp(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            old = b'{"sessions": [{"marker": "committed"}]}'
+            path.write_bytes(old)
+            memory = mod.Memory(str(path))
+            recovery = b'{"sessions": [{"marker": "recoverable"}]}'
+            pathlib.Path(str(path) + ".tmp").write_bytes(recovery)
+            memory.state["sessions"].append({"marker": "new"})
+            with self.assertRaisesRegex(RuntimeError, "temporary"):
+                memory.save()
+            self.assertEqual(path.read_bytes(), old)
+            self.assertEqual(pathlib.Path(str(path) + ".tmp").read_bytes(), recovery)
+
+    def test_real_process_exit_before_replace_preserves_recovery_evidence(self):
+        crash_script = (
+            "import os, runpy, sys\n"
+            "module = runpy.run_path(sys.argv[1])\n"
+            "def crash_before_replace(*args): os._exit(37)\n"
+            "os.replace = crash_before_replace\n"
+            "module['Monolith'](state_path=sys.argv[2]).think('synthetic', 'hello')\n"
+        )
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as d:
+                path = pathlib.Path(d) / "state.json"
+                old = b'{"sessions": [{"marker": "committed"}]}'
+                if existing:
+                    path.write_bytes(old)
+                proc = subprocess.run(
+                    [sys.executable, "-c", crash_script, str(SOURCE), str(path)],
+                    cwd=d, text=True, capture_output=True, timeout=10, check=False,
+                )
+                self.assertEqual(proc.returncode, 37, proc.stderr)
+                self.assertEqual(path.exists(), existing)
+                if existing:
+                    self.assertEqual(path.read_bytes(), old)
+                tmp = pathlib.Path(str(path) + ".tmp")
+                self.assertTrue(tmp.is_file())
+                self.assertEqual(len(json.loads(tmp.read_text(encoding="utf-8"))["sessions"]),
+                                 2 if existing else 1)
+                before = tmp.read_bytes()
+                with self.assertRaisesRegex(RuntimeError, "temporary"):
+                    mod.Memory(str(path))
+                self.assertEqual(tmp.read_bytes(), before)
+
 
 
 if __name__ == "__main__":
