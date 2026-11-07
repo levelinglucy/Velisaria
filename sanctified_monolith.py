@@ -7,6 +7,14 @@ Dylan + Noe + Octo White
 Contract across modules:
   .boot(config), .step(ctx) -> None, .snapshot() -> dict
 Shared context dict keys: user, text, affect, motion, rte, mesh, govern, memory, final
+
+Development summary (2026-11-07; untagged M2 candidate):
+  Memory.load refuses orphan .tmp recovery evidence instead of silently
+  starting/overwriting history; Memory.save exclusively creates .tmp.
+  Previous M1: malformed/unreadable saved state fails closed.
+  Next: confirm Python 3.11/3.12 CI, investigate safe copy-based recovery;
+  real power-loss and Pythonista/iPhone durability remain unverified.
+  Details: DEV_NOTES.md and CHANGELOG.md.
 Run:
   python3 sanctified_monolith.py
   python3 sanctified_monolith.py --profile room_profile.json
@@ -372,17 +380,30 @@ class Memory:
         self.load()
 
     def load(self):
-        """Load known session history or fail closed; never erase unreadable memory.
+        """Load session history, refusing unresolved temporary recovery evidence.
 
-        An interrupted/corrupt state is evidence to preserve for owner recovery.
-        Only a genuinely absent file starts a new history.
-        See DEV_NOTES.md (memory integrity decision).
+        A .tmp file may contain a more recent incomplete or complete write.
+        Never overwrite it automatically, including when the primary is absent.
+        See DEV_NOTES.md decisions M-001 and M-002.
         """
+        tmp = self.path + ".tmp"
+        if os.path.lexists(tmp):
+            raise RuntimeError(
+                "Velisaria temporary memory state at {!r} exists; file left unchanged. "
+                "Back up both state and temporary files, then investigate copies "
+                "before restarting.".format(tmp)
+            )
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
         except FileNotFoundError:
-            return  # First launch: no prior history to protect.
+            if os.path.lexists(self.path):
+                # A dangling symlink is not a genuinely absent history.
+                raise RuntimeError(
+                    "Velisaria memory state at {!r} is a dangling link; "
+                    "file left unchanged.".format(self.path)
+                )
+            return  # Genuine first launch with no previous recovery evidence.
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise RuntimeError(
                 "Cannot read Velisaria memory state at {!r}; file left unchanged. "
@@ -397,8 +418,17 @@ class Memory:
 
     def save(self):
         tmp = self.path + ".tmp"
-        with open(tmp,"w",encoding="utf-8") as f:
-            json.dump(self.state, f, indent=2)
+        try:
+            # Exclusive creation also prevents a running process from clobbering
+            # an orphan left by an earlier interrupted write.
+            with open(tmp, "x", encoding="utf-8") as f:
+                json.dump(self.state, f, indent=2)
+        except FileExistsError as exc:
+            raise RuntimeError(
+                "Velisaria temporary memory state at {!r} already exists; "
+                "file left unchanged. Preserve it and inspect copies before "
+                "retrying.".format(tmp)
+            ) from exc
         os.replace(tmp, self.path)
 
     def au_tier(self) -> int:

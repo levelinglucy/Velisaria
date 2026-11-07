@@ -1,5 +1,17 @@
 # Sanctified Monolith · change history
 
+## 2026-11-07 · interrupted-save preservation candidate (PR #3; not released)
+
+**Affected:** `sanctified_monolith.py` (Memory.load/save + developer header), `tests/test_memory_integrity.py`, project developer documentation. The Covenant and all archived monoliths are unchanged.
+
+**Verified previous behaviour:** writing state through a fixed `state.json.tmp` in `"w"` mode silently truncated any existing temporary record. Loading a valid primary with an orphan `.tmp` ignored that recovery evidence; loading a missing primary with a potentially recoverable `.tmp` treated it as a new installation. A subsequent save could erase an interrupted generation. Regression tests first demonstrated this against baseline commit `61b8d3f` (red CI [42318018754](https://github.com/levelinglucy/Velisaria/actions/runs/42318018754): six failing assertions/variants in each Python version; these are expected failures on the old behaviour, not a production crash report).
+
+**Change and why:** startup now refuses any existing `.tmp` rather than selecting a generation automatically; saving creates that path exclusively (`"x"`) rather than truncating it. A dangling primary-state symlink also cannot masquerade as a genuinely absent first launch. Valid first installs and existing valid history without leftover temporaries continue with the same JSON shape. Intentional extra caution preserves copies of recoverable local memory at the cost of manually inspecting orphan files.
+
+**Validation:** five new bounded synthetic test methods cover existing/missing primary, injected rename failure, an already-running saver encountering a pre-existing temp, and real subprocess termination via `os._exit(37)` immediately before replacement. All use disposable state. After the code and developer documentation changes, **12/12 tests passed independently on Python 3.11 and 3.12** at candidate `78e93607` in [CI run 42318191650](https://github.com/levelinglucy/Velisaria/actions/runs/42318191650). This is candidate CI, not evidence of a merge, release or power-cut durability.
+
+**Limitations and rollback:** `os.replace` is not a claim of power-loss durability (no directory/file fsync). Concurrent independent writers can still lose updates; `.tmp` may be partial, stale or newer and is never auto-promoted. On intentional rollback, copy both primary and temporary files first; reverting to the old saver could destroy the temporary evidence. No device validation, tagged version or released artifact yet. See [decision M-002](./DEV_NOTES.md#decision-m-002--never-overwrite-interrupted-temporary-memory).
+
 ## 2026-11-06 · memory-integrity maintenance candidate integrated (untagged, unreleased)
 
 **Affected:** `sanctified_monolith.py` `Memory.load`, `tests/test_memory_integrity.py`, developer documentation and Python CI.
