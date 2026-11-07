@@ -51,6 +51,8 @@ def _inspect(path):
             first = os.fstat(src.fileno())
             if not stat.S_ISREG(first.st_mode):
                 return {"status": "not_regular_file"}, None
+            if (before.st_dev, before.st_ino) != (first.st_dev, first.st_ino):
+                return {"status": "changed_during_open"}, None
             if first.st_size > MAX_BYTES:
                 return {"status": "too_large"}, None
             raw = src.read(MAX_BYTES + 1)
