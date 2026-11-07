@@ -8,13 +8,9 @@ Contract across modules:
   .boot(config), .step(ctx) -> None, .snapshot() -> dict
 Shared context dict keys: user, text, affect, motion, rte, mesh, govern, memory, final
 
-Development summary (2026-11-07; untagged M2 candidate):
-  Memory.load refuses orphan .tmp recovery evidence instead of silently
-  starting/overwriting history; Memory.save exclusively creates .tmp.
-  Previous M1: malformed/unreadable saved state fails closed.
-  Next: confirm Python 3.11/3.12 CI, investigate safe copy-based recovery;
-  real power-loss and Pythonista/iPhone durability remain unverified.
-  Details: DEV_NOTES.md and CHANGELOG.md.
+Memory integrity: damaged state and unresolved .tmp prevent writes;
+a separate metadata-only inspector supports owner review on copied data.
+Recovery policy and limits: DEV_NOTES.md. Change history: CHANGELOG.md.
 Run:
   python3 sanctified_monolith.py
   python3 sanctified_monolith.py --profile room_profile.json

@@ -1,10 +1,7 @@
 """Synthetic, isolated regression coverage for the small Sanctified Monolith.
 
-Development summary (2026-11-06): detect and prevent silent loss of session
-history during startup after a truncated, unreadable, or malformed state file.
-Runs with Python stdlib only; does not access a user's actual history.
-Next: validate fail-closed handling of interrupted saves and test on Pythonista.
-See DEV_NOTES.md and CHANGELOG.md.
+Tests fail closed on unreadable/corrupt history and interrupted saves.
+Stdlib only; use disposable state. See DEV_NOTES.md and CHANGELOG.md.
 """
 import hashlib
 import importlib.util

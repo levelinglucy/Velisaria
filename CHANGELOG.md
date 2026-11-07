@@ -1,5 +1,12 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M3 read-only state inspection
+
+- Added standalone stdlib `inspect_memory_state.py --state PATH` to inspect copied primary and adjacent `.tmp` histories. It does not change memory files, promote either generation, or print session contents.
+- Reports strict JSON/schema validity, private session counts and conservative equality/prefix/divergence relationships; rejects symlinks, special files, oversized files and detected file-change races.
+- Added disposable synthetic tests for missing, damaged, divergent and prefix-related generations, CLI privacy, links and byte-for-byte preservation. Validation evidence belongs to the associated pull request's checks.
+- Recovery implication: **no automatic repair**. A prefix relationship is not a trustworthy chronology or proof of crash durability. Inspect only owner-made copies with writers stopped; retain original evidence. See [decision M-003](./DEV_NOTES.md#decision-m-003--inspect-competing-memory-copies-without-choosing-one).
+
 ## 2026-11-07 · interrupted-save preservation merged candidate (PR #3; not released)
 
 **Affected:** `sanctified_monolith.py` (Memory.load/save + developer header), `tests/test_memory_integrity.py`, project developer documentation. The Covenant and all archived monoliths are unchanged.

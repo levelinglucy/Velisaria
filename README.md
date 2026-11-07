@@ -25,12 +25,8 @@ This Covenant is not enforceable by law. It is enforceable by honor.
 
 ---
 
-## Development summary · Sanctified Monolith source
+## Development · Sanctified Monolith source
 
-**Current source status:** M1 memory-integrity patch is merged and tested, without a release tag; M2 interrupted-save preservation is **merged as an untagged maintenance candidate through [PR #3](https://github.com/levelinglucy/Velisaria/pull/3)**, not declared stable. The historical **Velisara Covenant v1.0 above is unchanged**. These changes affect only the smaller `sanctified_monolith.py`, not the archived monoliths.
+The smaller `sanctified_monolith.py` preserves local history by refusing damaged state or leftover `.tmp` evidence. `inspect_memory_state.py` can inspect **owner-made copies** without changing the data or choosing a recovery file. This does not change the Covenant or the archived monoliths.
 
-**Latest actual changes:** after a process interruption, `state.json.tmp` can hold recoverable history. Previously a subsequent save could truncate this file. The M2 candidate refuses unresolved temporary evidence on startup and uses exclusive temp creation on save. It does **not** automatically select or repair history. Synthetic pre-replace termination and exception tests exercise this boundary; previous behaviour failed in [red CI 42318018754](https://github.com/levelinglucy/Velisaria/actions/runs/42318018754), then **12/12 tests passed on each Python 3.11 and 3.12** in [candidate CI 42318191650](https://github.com/levelinglucy/Velisaria/actions/runs/42318191650) at `78e93607`, and merged main `d3082d1a` passed [CI 42318351081](https://github.com/levelinglucy/Velisaria/actions/runs/42318351081).
-
-**Next:** inspect orphaned state copies locally before any restoration, then seek trusted Pythonista/iPhone validation. **Release blockers:** no trusted iPhone/Pythonista test, cross-process write protection, actual power-loss durability evidence or tagged release. A leftover `.tmp` deliberately stops normal startup until reviewed.
-
-[Developer notes and decisions](./DEV_NOTES.md) · [Change history](./CHANGELOG.md) · [Synthetic tests](./tests/test_memory_integrity.py)
+[Developer notes and recovery limits](./DEV_NOTES.md) · [Change history](./CHANGELOG.md) · [Synthetic tests](./tests/)

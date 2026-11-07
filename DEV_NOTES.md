@@ -2,9 +2,9 @@
 
 ## Development summary
 
-**Status:** historical Velisara Covenant v1.0 remains unchanged. The smaller `sanctified_monolith.py` now has an **integrated, untagged memory-integrity maintenance candidate** on main via [PR #1](https://github.com/levelinglucy/Velisaria/pull/1), merge `fdbe2494`; it is not a versioned stable release.
+**Purpose:** preserve local session history in the smaller Sanctified Monolith without changing the historical Covenant or archived monoliths. **Integration:** M1 corrupt-state and M2 interrupted-save preservation are merged maintenance candidates; the M3 read-only inspector is documented under **Unreleased**. PR history records integration and CI; none of this is a tagged stable release.
 
-**Current goal:** protect existing local history across interrupted saves. **Current stage:** M2 maintenance candidate merged through PR #3 at main `d3082d1a`, not tagged or released; M1 fail-closed loader remains part of the integrated main baseline. **Latest changes:** refuse leftover `.tmp` at startup and exclusively create the temporary file when saving, preserving possible interrupted generations; simulate real pre-replace process exit on synthetic data. **Next priorities:** (1) investigate copy-only owner inspection for competing state generations; (2) obtain trusted Pythonista/iPhone and real power-loss evidence before stable promotion; (3) revisit multi-writer coordination only with a concrete use case. **Limitations:** no automatic repair, cross-process write coordination or proven power-cut durability. [Changelog](./CHANGELOG.md) · [Tests](./tests/test_memory_integrity.py).
+**Current goal:** allow an owner to inspect *copies* of the primary and orphan `.tmp` files without overwriting either or showing session contents. **Latest implementation:** `inspect_memory_state.py` reports bounded validity and list-prefix relationships, and declines unsafe file types. **Next steps:** run isolated inspections against additional synthetic legacy shapes; seek relevant Pythonista/iPhone evidence; investigate manual recovery only if an evidence-backed procedure exists. **Limitations:** structural similarity does not prove chronology, completeness, power-cut durability or safe auto-restoration. [Changelog](./CHANGELOG.md) · [Inspector tests](./tests/test_memory_inspector.py) · [Memory tests](./tests/test_memory_integrity.py).
 
 ## What was verified in original source (main e311e1b)
 
@@ -31,6 +31,15 @@ The monolith's CLI writes `sanctified_state.json` in the **current working direc
 - **Not guaranteed:** safe concurrent independent writers, durable power-loss atomicity, file/directory fsync or Pythonista filesystem semantics. `os.replace` ensures a rename boundary on tested platforms, not a durability guarantee. The process-exit tests stop *before* replace, not during a real OS crash.
 - **Revisit:** if trusted device tests or realistic old-format snapshots support a simpler owner recovery and an explicitly safe reconciliation procedure, with a rollback plan and no automatic deletion of the original evidence.
 
+## Decision M-003 · inspect competing memory copies without choosing one
+
+- **Problem:** after an interrupted save, the program correctly refuses to overwrite `.tmp`, but an owner needs useful, private evidence to decide what to preserve.
+- **Alternatives:** auto-promote the newer-looking file (unsafe: no durable ordering proof); add a repair command to normal startup (risks overwriting the only complete copy); or provide a separate metadata-only inspector.
+- **Choice:** `inspect_memory_state.py` opens only ordinary files without following final-component symlinks, reads at most 32 MiB per file, parses strict UTF-8 JSON with unique keys, and reports presence, structural validity, session counts and whether one list is a prefix of the other. If non-session fields differ, the relationship is `divergent`. It never writes, creates copies, selects a winner, deletes records or prints session contents.
+- **Safety limits:** run against owner-made copies in an isolated directory, preferably with the writer stopped. A prefix is a *content relationship*, not proof that either file is newer or valid to promote. `equivalent_data` is parsed equality, not evidence of identical physical writes or durability. Counts are disclosed in local output. A file beyond 32 MiB, a symlink, missing `O_NOFOLLOW` support, malformed JSON or detected concurrent modification prevents a claim of valid inspection. Independent reads cannot form an atomic pair of snapshots.
+- **Compatibility:** standalone, stdlib-only; existing memory loading/saving and the persistent JSON schema are unchanged. No automatic recovery or stable-release claim is introduced.
+- **Revisit:** only after relevant owner-controlled evidence establishes a safe procedure for specific recovery scenarios; otherwise preserve both generations.
+
 ## Running safely
 
 With a checkout and Python 3.11+:
@@ -47,7 +56,13 @@ python /absolute/path/to/sanctified_monolith.py --origin-io
 
 Send a JSON line such as `{"user":"demo","text":"hello"}` then `/quit`. Avoid using your actual state folder for experiments.
 
-**Owner recovery if startup fails:** Do not rerun an older version against the damaged state. Preserve the exact file bytes and any adjacent `.tmp` file before investigating. Work on copies; do not rename `.tmp` to the live state without checking which generation it contains. This branch does not include a repair command.
+**Owner recovery if startup fails:** Stop the writer. Preserve the exact bytes of both the primary and adjacent `.tmp` where they exist. Make separate working copies in an isolated directory. Run the inspector **on the copied primary path**, not in the live working directory:
+
+```sh
+python inspect_memory_state.py --state /path/to/isolated-copy/sanctified_state.json
+```
+
+The result contains metadata only. `primary_sessions_prefix_of_temporary` does **not** authorize promoting `.tmp`: the same prefix could be stale or from another run. Retain both originals and seek evidence-based recovery rather than using an older saver, manually renaming files, or trying repeated startup.
 
 ## Milestone / release gates
 
@@ -57,4 +72,4 @@ Send a JSON line such as `{"user":"demo","text":"hello"}` then `/quit`. Avoid us
 
 ## Continuation
 
-First inspect merged main `d3082d1a`, preserved CI, and new issues; M2 is integrated. Next investigate copy-based inspection for an orphan `.tmp` without auto-promotion or deleting the originals. Keep the original Covenant and large archives intact. Do not promise deterministic replay: `MotionForge._seed` uses Python's process-randomized `hash(text)` and requires an independent decision.
+M1/M2 preserve damaged and orphaned state; M3 supplies a separate read-only, no-repair inspection aid. Review synthetic/legacy copied-format evidence and possible honest owner recovery guidance next. Preserve the original Covenant and archives. Do not promise deterministic replay: `MotionForge._seed` uses Python's process-randomized `hash(text)`.
