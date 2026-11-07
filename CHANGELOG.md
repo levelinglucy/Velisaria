@@ -1,6 +1,6 @@
 # Sanctified Monolith · change history
 
-## 2026-11-07 · interrupted-save preservation candidate (PR #3; not released)
+## 2026-11-07 · interrupted-save preservation merged candidate (PR #3; not released)
 
 **Affected:** `sanctified_monolith.py` (Memory.load/save + developer header), `tests/test_memory_integrity.py`, project developer documentation. The Covenant and all archived monoliths are unchanged.
 
@@ -8,7 +8,7 @@
 
 **Change and why:** startup now refuses any existing `.tmp` rather than selecting a generation automatically; saving creates that path exclusively (`"x"`) rather than truncating it. A dangling primary-state symlink also cannot masquerade as a genuinely absent first launch. Valid first installs and existing valid history without leftover temporaries continue with the same JSON shape. Intentional extra caution preserves copies of recoverable local memory at the cost of manually inspecting orphan files.
 
-**Validation:** five new bounded synthetic test methods cover existing/missing primary, injected rename failure, an already-running saver encountering a pre-existing temp, and real subprocess termination via `os._exit(37)` immediately before replacement. All use disposable state. After the code and developer documentation changes, **12/12 tests passed independently on Python 3.11 and 3.12** at candidate `78e93607` in [CI run 42318191650](https://github.com/levelinglucy/Velisaria/actions/runs/42318191650). This is candidate CI, not evidence of a merge, release or power-cut durability.
+**Validation:** five new bounded synthetic test methods cover existing/missing primary, injected rename failure, an already-running saver encountering a pre-existing temp, and real subprocess termination via `os._exit(37)` immediately before replacement. All use disposable state. After the code and developer documentation changes, **12/12 tests passed independently on Python 3.11 and 3.12** at candidate `78e93607` in [CI run 42318191650](https://github.com/levelinglucy/Velisaria/actions/runs/42318191650). The exact final PR head `f112440b` passed [CI 42318289406](https://github.com/levelinglucy/Velisaria/actions/runs/42318289406) in both versions; merged main `d3082d1a` then passed [CI 42318351081](https://github.com/levelinglucy/Velisaria/actions/runs/42318351081). This is an integrated, untagged candidate; neither a stable release nor power-cut durability is established.
 
 **Limitations and rollback:** `os.replace` is not a claim of power-loss durability (no directory/file fsync). Concurrent independent writers can still lose updates; `.tmp` may be partial, stale or newer and is never auto-promoted. On intentional rollback, copy both primary and temporary files first; reverting to the old saver could destroy the temporary evidence. No device validation, tagged version or released artifact yet. See [decision M-002](./DEV_NOTES.md#decision-m-002--never-overwrite-interrupted-temporary-memory).
 
