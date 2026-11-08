@@ -1,5 +1,14 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M9 stale-memory save protection
+
+- Reject an ordinary save if the on-disk primary changed since this instance last loaded or successfully saved it; prevent sequential stale writers from silently replacing more recent sessions.
+- Detect a new primary appearing after first-start, as well as externally edited existing files. Reject *before* opening staging files; preserve the disk state on refusal.
+- Retain normal successive saves from the same process and accept CRLF-originated histories, with LF UTF-8 staging so checksums match emitted bytes across platforms.
+- Synthetic test-first failures reproduced the original three overwrite paths on both Python 3.11/3.12. The guarded candidate passed 35/35 per version plus compilation; exact integration proof and final revision belong to [PR #11](https://github.com/levelinglucy/Velisaria/pull/11).
+- This is not an atomic multiwriter transaction: simultaneous writers can still race between the check and replace. No iPhone or power-loss durability claim. See [decision M-009](./DEV_NOTES.md#decision-m-009--reject-stale-memory-snapshots-before-staging).
+
+
 ## Unreleased · M8 complete-history retention
 
 - Stop silently dropping older saved sessions once a new entry crosses 4,000 records. Previously 4,001 became only the latest 2,500; the new behavior preserves all existing records without changing the JSON schema.

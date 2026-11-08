@@ -18,6 +18,7 @@ Run:
   python3 sanctified_monolith.py --profile room_profile.json --origin-io
 """
 
+import hashlib
 import json, os, re, time, uuid, random, math, sys
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -433,6 +434,8 @@ class Memory:
     def __init__(self, path="sanctified_state.json"):
         self.path = path
         self.state = {"sessions": []}
+        # None records a genuine absent primary at initial load.
+        self._loaded_digest = None
         self.load()
 
     def load(self):
@@ -450,8 +453,9 @@ class Memory:
                 "before restarting.".format(tmp)
             )
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                raw = f.read()
+            with open(self.path, "rb") as f:
+                source_bytes = f.read()
+            raw = source_bytes.decode("utf-8")
             _memory_check_nesting(raw)
             loaded = json.loads(
                 raw,
@@ -478,6 +482,7 @@ class Memory:
                 "Expected an object with a sessions list.".format(self.path)
             )
         self.state = loaded
+        self._loaded_digest = hashlib.sha256(source_bytes).digest()
 
     def save(self):
         # Validate the complete JSON representation before creating any staging
@@ -485,11 +490,33 @@ class Memory:
         # next strict loader must never inherit nonstandard NaN/Infinity tokens.
         # A real interrupted file write/rename still leaves .tmp as evidence.
         serialized = json.dumps(self.state, indent=2, allow_nan=False)
+        # Refuse to publish an old in-memory snapshot over a generation that
+        # changed since our load/last save. This detects sequential stale
+        # writers, not simultaneous writes racing between check and replace.
+        try:
+            with open(self.path, "rb") as f:
+                current_digest = hashlib.sha256(f.read()).digest()
+        except FileNotFoundError:
+            if os.path.lexists(self.path):
+                raise RuntimeError(
+                    "Velisaria primary memory link is unresolved; file left unchanged."
+                )
+            current_digest = None
+        except OSError as exc:
+            raise RuntimeError(
+                "Cannot verify Velisaria primary memory before save; "
+                "file left unchanged."
+            ) from exc
+        if current_digest != self._loaded_digest:
+            raise RuntimeError(
+                "Velisaria memory changed since load or last save; file left unchanged. "
+                "Preserve current state and investigate copies before retrying."
+            )
         tmp = self.path + ".tmp"
         try:
             # Exclusive creation also prevents a running process from clobbering
             # an orphan left by an earlier interrupted write.
-            with open(tmp, "x", encoding="utf-8") as f:
+            with open(tmp, "x", encoding="utf-8", newline="\n") as f:
                 f.write(serialized)
         except FileExistsError as exc:
             raise RuntimeError(
@@ -498,6 +525,7 @@ class Memory:
                 "retrying.".format(tmp)
             ) from exc
         os.replace(tmp, self.path)
+        self._loaded_digest = hashlib.sha256(serialized.encode("utf-8")).digest()
 
     def au_tier(self) -> int:
         n = len(self.state["sessions"])
