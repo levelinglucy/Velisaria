@@ -283,5 +283,48 @@ class InterruptedSaveTests(unittest.TestCase):
 
 
 
+class SafeSavePreflightTests(unittest.TestCase):
+    """Failed serialization must not change the committed state or strand .tmp."""
+
+    def test_nonfinite_generated_numbers_refuse_without_publication(self):
+        for value in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(value=repr(value)), tempfile.TemporaryDirectory() as d:
+                path = pathlib.Path(d) / "state.json"
+                original = b'{"sessions":[{"marker":"previous"}]}'
+                path.write_bytes(original)
+                m = mod.Memory(str(path))
+                m.state["sessions"].append({"metrics": {"score": value}})
+                with self.assertRaises(ValueError):
+                    m.save()
+                self.assertEqual(path.read_bytes(), original)
+                self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+    def test_unserializable_generated_record_does_not_strand_temp(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            original = b'{"sessions":[{"marker":"previous"}]}'
+            path.write_bytes(original)
+            m = mod.Memory(str(path))
+            m.state["sessions"].append({"unexpected": object()})
+            with self.assertRaises(TypeError):
+                m.save()
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+    def test_circular_generated_record_does_not_strand_temp(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            original = b'{"sessions":[{"marker":"previous"}]}'
+            path.write_bytes(original)
+            m = mod.Memory(str(path))
+            cycle = []
+            cycle.append(cycle)
+            m.state["sessions"].append({"unexpected": cycle})
+            with self.assertRaisesRegex(ValueError, "Circular reference"):
+                m.save()
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
