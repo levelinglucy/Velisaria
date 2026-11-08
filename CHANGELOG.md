@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M7 strict generated-memory save preflight
+
+- Validate and serialize the complete in-memory state with standard JSON numbers before creating `.tmp`, refusing generated NaN/Infinity instead of publishing a state the next strict loader cannot read.
+- Reject unserializable records and circular structures before filesystem writes, avoiding partially written staging files on ordinary JSON encoding failures. Actual failed staging/rename operations continue to retain recovery evidence; previously committed memory remains untouched.
+- Preserve the existing JSON shape and output formatting, with a proportional in-memory serialization buffer cost. Disposable regression coverage and trade-offs are in [decision M-007](./DEV_NOTES.md#decision-m-007--validate-generated-memory-before-staging) and [PR #9](https://github.com/levelinglucy/Velisaria/pull/9). Unreleased; no device or power-loss claim.
+
 ## Unreleased · M6 finite numeric history fidelity
 
 - Reject saved finite JSON decimals whose numeric value would be rounded or underflowed by the live float loader and next standard JSON save; do not overwrite contested original history.
