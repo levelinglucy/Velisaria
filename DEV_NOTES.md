@@ -2,9 +2,9 @@
 
 ## Development summary
 
-**Purpose:** protect the local Sanctified Monolith's recoverable session history without modifying archives or its established JSON schema. **Integration:** M1–M6 merged as unreleased maintenance; **M7 is proposed** in [PR #9](https://github.com/levelinglucy/Velisaria/pull/9), not yet assumed merged. **Validation:** exact test-first and candidate checks belong to that PR; none are assumed successful in advance. **Release:** unreleased; no target-device, multiwriter or power-loss certification.
+**Purpose:** protect the local Sanctified Monolith's recoverable session history without modifying archives or its established JSON schema. **Integration:** M1–M7 merged as unreleased maintenance; M8 retention repair proposed in [PR #10](https://github.com/levelinglucy/Velisaria/pull/10). **Validation:** latest merged M7 passed [30/30 tests each on Python 3.11 and 3.12](https://github.com/levelinglucy/Velisaria/actions/runs/42489828810) at `b00c98e`; M8 validation belongs to PR #10 and is not assumed complete. **Release:** unreleased; no target-device, multiwriter or power-loss certification.
 
-**Current goal:** refuse invalid generated JSON before opening the memory staging file, so in-memory nonfinite numbers cannot be published and unsupported records/cycles cannot strand a partial `.tmp` during serialization. The M7 candidate serializes with `allow_nan=False` before exclusive staging; genuine staging/rename failures must still preserve recovery evidence. **Next:** check M7 test-first regressions, exact candidate CI, current base and required checks before any merge; then select the next substantive milestone. [Changelog](./CHANGELOG.md) · [PR #9](https://github.com/levelinglucy/Velisaria/pull/9) · [Memory tests](./tests/test_memory_integrity.py).
+**Current goal:** stop automatic loss of earlier sessions when a new entry takes the history beyond 4,000 records. Preserve every entry by default, using the established strict JSON staging, until an explicit owner-controlled archival/capacity design exists. **Next:** validate retention at the 4,001-entry boundary and prior integrity checks; check merge suitability; assess sustainable storage handling before any future retention policy. [Changelog](./CHANGELOG.md) · [PR #10 and exact evidence](https://github.com/levelinglucy/Velisaria/pull/10) · [Memory tests](./tests/test_memory_integrity.py).
 
 ## What was verified in original source (main e311e1b)
 
@@ -78,6 +78,16 @@ The monolith's CLI writes `sanctified_state.json` in the **current working direc
 
 **Trade-offs and acceptance:** an additional serialized string consumes memory proportional to the state size, and invalid newly generated content now refuses the save rather than being written. Valid output retains the prior JSON format. Synthetic NaN/Infinity, unsupported objects and cycles must fail without creating `.tmp` or overwriting a committed primary; existing valid saves and interrupted-write safeguards must remain green. It does not make filesystem publication crash-durable, protect against simultaneous writers or authorize auto-recovery. Revisit if measured memory use makes full preflight unsuitable on a supported device, with a bounded streaming design that preserves the same refusal guarantee. Exact candidate/CI evidence and integration status belong to [PR #9](https://github.com/levelinglucy/Velisaria/pull/9).
 
+## Decision M-008 · never prune saved sessions implicitly
+
+**Confirmed predecessor:** `Memory.log()` automatically changed a 4,001-entry history to its newest 2,500 entries before the next `Memory.save()`. This discards **1,501 older records**, including the earliest session, without warning or a separate archive. A disposable 4,000-record seed plus one new entry reproduced the loss on both Python 3.11 and 3.12 ([failing regression CI](https://github.com/levelinglucy/Velisaria/actions/runs/42494651459)); no real owner memory damage is claimed.
+
+**Alternatives:** retain the silent cap (unacceptable for a preservation-oriented tool); block new messages at 4,000 (prevents recording new interactions); implement an automatic archive rollover (requires multi-file, crash-safe coordination); or **retain the complete history for now** (selected). Remove implicit trimming only; preserve JSON schema, previous committed history, exclusive `.tmp` staging and historical sources. No new knobs, migrations or automatic file deletion.
+
+**Trade-offs:** JSON size, load/parse time and the existing full serialization buffer grow with session count. Long-running use needs owner-managed copies and eventually an explicit, separately validated archival strategy; no device storage budget or unlimited growth guarantee is claimed. A future cap must **fail clearly or archive without loss** rather than quietly dropping history. A failed save still follows the existing conservative recovery policy; this milestone does not establish fsync, multiwriter safety or power-cut durability.
+
+**Acceptance:** a fresh synthetic 4,000-record history plus one logged session saves and reloads as **4,001 records**, with all original entries unchanged. Previous history integrity, CLI and interrupted-save tests still pass on CPython 3.11/3.12. Exact validation and integration belong to [PR #10](https://github.com/levelinglucy/Velisaria/pull/10).
+
 ## Running safely
 
 With a checkout and Python 3.11+:
@@ -106,8 +116,8 @@ The result contains metadata only. `primary_sessions_prefix_of_temporary` does *
 
 - **M1 (integrated candidate):** non-destructive refusal on malformed state + isolated synthetic CLI tests. Seven tests passed on Python 3.11 and 3.12 at the final PR head and merged-main candidate (CI [42312031091](https://github.com/levelinglucy/Velisaria/actions/runs/42312031091), [42312078957](https://github.com/levelinglucy/Velisaria/actions/runs/42312078957)).
 - **M2 (merged maintenance candidate):** interrupted-write/exclusive-temp preservation, synthetic pre-replace process termination, and copy-only owner guidance. 12/12 tests passed per version in [final PR CI 42318289406](https://github.com/levelinglucy/Velisaria/actions/runs/42318289406) at `f112440b`, and [merged-main CI 42318351081](https://github.com/levelinglucy/Velisaria/actions/runs/42318351081) at `d3082d1a`. Trusted Pythonista and actual power-cut checks remain pending.
-- **Stable:** only after actual target-device checks and an explicit release decision. No tag, release or migration is claimed now.
+- **Stable:** only for platforms and behaviours backed by sufficient evidence and an explicit release decision. Target iPhone/Pythonista support can remain unverified and experimental rather than blocking unrelated verified CPython development. No tag, release or migration is claimed now.
 
 ## Continuation
 
-M1/M2 preserve damaged and orphaned state; M3 supplies a separate read-only, no-repair inspection aid. Review synthetic/legacy copied-format evidence and possible honest owner recovery guidance next. Preserve the original Covenant and archives. Do not promise deterministic replay: `MotionForge._seed` uses Python's process-randomized `hash(text)`.
+Historical M1/M2 recovery invariants and M3 read-only inspection remain in force. Current selected work and next actions are in the [development summary](#development-summary). Preserve the original Covenant and archives. Do not promise deterministic replay: `MotionForge._seed` uses Python's process-randomized `hash(text)`.
