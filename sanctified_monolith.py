@@ -20,6 +20,7 @@ Run:
 
 import json, os, re, time, uuid, random, math, sys
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, List
 
 # ========== EventBus + Context ==========
@@ -389,6 +390,15 @@ def _memory_finite_float(token):
     value = float(token)
     if not math.isfinite(value):
         raise ValueError("JSON number exceeds finite float range")
+    # The live writer uses json.dump on ordinary floats. Before loading an
+    # existing record, verify that serialization would preserve its decimal
+    # numeric value rather than rounding or underflowing historical evidence.
+    # Benign alternative spellings (1e0 vs 1.0) remain compatible.
+    try:
+        if Decimal(token) != Decimal(repr(value)):
+            raise ValueError("memory JSON decimal loses numeric precision")
+    except InvalidOperation as exc:
+        raise ValueError("memory JSON decimal cannot be checked safely") from exc
     return value
 
 
