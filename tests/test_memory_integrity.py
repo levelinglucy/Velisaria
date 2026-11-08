@@ -50,6 +50,58 @@ class MemoryIntegrityTests(unittest.TestCase):
                 mod.Memory(str(path))
             self.assertEqual(path.read_bytes(), original)
 
+    def test_duplicate_state_keys_cannot_erase_history(self):
+        # Both positions are significant; Python's default json.load silently
+        # keeps the last value and the next normal save would erase evidence.
+        examples = (
+            b'{"sessions":[{"marker":"valuable"}],"sessions":[]}',
+            b'{"sessions":[{"marker":"valuable","marker":"replacement"}]}',
+            b'{"sessions":[{"other":{"important":1,"important":2}}]}',
+        )
+        for original in examples:
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as d:
+                path = pathlib.Path(d) / "state.json"
+                path.write_bytes(original)
+                with self.assertRaisesRegex(RuntimeError, "left unchanged"):
+                    mod.Monolith(state_path=str(path))
+                self.assertEqual(path.read_bytes(), original)
+                self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+    def test_nonfinite_json_numbers_cannot_enter_live_history(self):
+        for constant in ("NaN", "Infinity", "-Infinity", "1e400", "-1e400"):
+            original = ('{"sessions":[{"metrics":{"score":' + constant + '}}]}').encode()
+            with self.subTest(constant=constant), tempfile.TemporaryDirectory() as d:
+                path = pathlib.Path(d) / "state.json"
+                path.write_bytes(original)
+                with self.assertRaisesRegex(RuntimeError, "left unchanged"):
+                    mod.Memory(str(path))
+                self.assertEqual(path.read_bytes(), original)
+                self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+    def test_excessive_json_nesting_fails_closed_without_rewrite(self):
+        # Reader exhaustion should be a controlled startup refusal, not an
+        # unhandled RecursionError followed by a risky user workaround.
+        original = (b'{"sessions":' + b'[' * 1500 + b'0' + b']' * 1500 + b'}')
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            path.write_bytes(original)
+            with self.assertRaisesRegex(RuntimeError, "left unchanged"):
+                mod.Memory(str(path))
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+    def test_brackets_and_escaped_quotes_inside_strings_remain_valid(self):
+        # The depth bound must count JSON containers, never syntax-like text.
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            value = {"sessions": [{"text": 'quoted "[{" ' + "[" * 600 + "}" * 600}]}
+            original = json.dumps(value, ensure_ascii=False).encode("utf-8")
+            path.write_bytes(original)
+            memory = mod.Memory(str(path))
+            self.assertEqual(memory.state, value)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
     def test_invalid_top_level_schema_is_not_overwritten(self):
         for raw in (b"[]", b"{}", b'{"sessions": null}', b'{"sessions": "history"}'):
             with self.subTest(raw=raw), tempfile.TemporaryDirectory() as d:

@@ -369,6 +369,56 @@ class Governance:
 
 # ========== Memory (AU tier + log) ==========
 
+# Live-state decoding must refuse ambiguous evidence before a later save
+# can replace its only on-disk copy. Keep ordinary JSON numeric types so the
+# historical session shape and calculation code do not change.
+def _memory_unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key in memory state")
+        result[key] = value
+    return result
+
+
+def _memory_reject_constant(value):
+    raise ValueError("non-standard JSON constant in memory state")
+
+
+def _memory_finite_float(token):
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError("JSON number exceeds finite float range")
+    return value
+
+
+def _memory_check_nesting(raw, maximum=256):
+    """Bound container nesting across Python JSON decoder versions.
+
+    Ignore braces and brackets inside quoted strings, including escaped
+    quotes; the JSON decoder remains responsible for actual syntax checks.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            if depth > maximum:
+                raise ValueError("memory JSON nesting exceeds safe limit")
+        elif char in "]}":
+            depth -= 1
+
+
 class Memory:
     def __init__(self, path="sanctified_state.json"):
         self.path = path
@@ -391,7 +441,14 @@ class Memory:
             )
         try:
             with open(self.path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
+                raw = f.read()
+            _memory_check_nesting(raw)
+            loaded = json.loads(
+                raw,
+                object_pairs_hook=_memory_unique_object,
+                parse_constant=_memory_reject_constant,
+                parse_float=_memory_finite_float,
+            )
         except FileNotFoundError:
             if os.path.lexists(self.path):
                 # A dangling symlink is not a genuinely absent history.
@@ -400,7 +457,7 @@ class Memory:
                     "file left unchanged.".format(self.path)
                 )
             return  # Genuine first launch with no previous recovery evidence.
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, ValueError, OverflowError, RecursionError) as exc:
             raise RuntimeError(
                 "Cannot read Velisaria memory state at {!r}; file left unchanged. "
                 "Back it up and repair/restore it before starting.".format(self.path)
