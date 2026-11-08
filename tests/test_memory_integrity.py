@@ -90,6 +90,18 @@ class MemoryIntegrityTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), original)
             self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
 
+    def test_brackets_and_escaped_quotes_inside_strings_remain_valid(self):
+        # The depth bound must count JSON containers, never syntax-like text.
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            value = {"sessions": [{"text": 'quoted "[{" ' + "[" * 600 + "}" * 600}]}
+            original = json.dumps(value, ensure_ascii=False).encode("utf-8")
+            path.write_bytes(original)
+            memory = mod.Memory(str(path))
+            self.assertEqual(memory.state, value)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
     def test_invalid_top_level_schema_is_not_overwritten(self):
         for raw in (b"[]", b"{}", b'{"sessions": null}', b'{"sessions": "history"}'):
             with self.subTest(raw=raw), tempfile.TemporaryDirectory() as d:
