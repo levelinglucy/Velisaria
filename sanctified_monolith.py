@@ -516,8 +516,8 @@ class Memory:
                 "alignment": ctx.get("govern",{}).get("apn",{}).get("alignment",0.0)
             }
         })
-        if len(self.state["sessions"]) > 4000:
-            self.state["sessions"] = self.state["sessions"][-2500:]
+        # Never silently discard earlier sessions. Archival/retention must be
+        # an explicit owner-controlled operation, not a side effect of logging.
 
     def step(self, ctx: Dict[str, Any]) -> None:
         ctx["memory"] = {"au_tier": self.au_tier()}
