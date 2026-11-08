@@ -69,9 +69,53 @@ class ProfileLoader:
         self.profile = {}
         self._mtime = None
 
+    @staticmethod
+    def _validate(profile):
+        # Validate every supported setting before caching a hot reload. This
+        # prevents a malformed section from partially changing a live core.
+        if not isinstance(profile, dict):
+            raise ValueError("profile root must be a JSON object")
+        sections = {}
+        for name in ("priors", "terms", "gains"):
+            section = profile.get(name, {})
+            if not isinstance(section, dict):
+                raise ValueError("profile {} must be an object".format(name))
+            sections[name] = section
+
+        numeric_fields = (
+            (sections["priors"], (
+                "compassion_bias", "stability_bias", "curiosity_bias",
+                "safety_bias", "attention_tier_boost")),
+            (sections["gains"], ("compassion_gain", "curiosity_gain")),
+        )
+        for section, fields in numeric_fields:
+            for key in fields:
+                if key not in section:
+                    continue
+                value = section[key]
+                if type(value) not in (int, float):
+                    raise ValueError("profile {} must be a finite number".format(key))
+                try:
+                    valid = math.isfinite(value)
+                except (OverflowError, ValueError):
+                    valid = False
+                if not valid:
+                    raise ValueError("profile {} must be a finite number".format(key))
+
+        for key in ("positive", "negative", "curiosity", "resonance"):
+            if key not in sections["terms"]:
+                continue
+            entries = sections["terms"][key]
+            if not isinstance(entries, list) or any(
+                not isinstance(item, str) for item in entries
+            ):
+                raise ValueError("profile terms.{} must be an array of strings".format(key))
+        return profile
+
     def _read(self, p: str):
         with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
+            loaded = json.load(f)
+        return self._validate(loaded)
 
     def load(self, path: str = None):
         p = path or self.path
