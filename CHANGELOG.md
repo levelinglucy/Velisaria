@@ -1,5 +1,13 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M10 empathy profile validation
+
+- Validate supported profile sections and settings before caching an incoming profile, preventing malformed JSON from crashing later empathy processing or partially updating a live core.
+- Reject wrong-shaped priors/gains, nonfinite or nonnumeric configured values and term lists that are not arrays of strings; preserve the last good profile (or defaults) when a reload is invalid.
+- Keep existing partial-profile semantics and persistent session schema; no historical sources or user data are modified. Synthetic regressions and decision rationale: [PR #12](https://github.com/levelinglucy/Velisaria/pull/12) and [M-010](./DEV_NOTES.md#decision-m-010--validate-empathy-profiles-before-application).
+- Finite values are not magnitude bounded; unusual huge numbers or terms can still produce runtime/resource issues. This is not a full profile authentication, filesystem or device safety guarantee.
+
+
 ## Unreleased · M9 stale-memory save protection
 
 - Reject an ordinary save if the on-disk primary changed since this instance last loaded or successfully saved it; prevent sequential stale writers from silently replacing more recent sessions.
