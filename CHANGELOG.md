@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M8 complete-history retention
+
+- Stop silently dropping older saved sessions once a new entry crosses 4,000 records. Previously 4,001 became only the latest 2,500; the new behavior preserves all existing records without changing the JSON schema.
+- Add a disposable 4,000→4,001 history round-trip regression. Exact test-first failure on Python 3.11/3.12: [CI 42494651459](https://github.com/levelinglucy/Velisaria/actions/runs/42494651459). Final validation and integration evidence belong to [PR #10](https://github.com/levelinglucy/Velisaria/pull/10).
+- History, file size and memory required for full serialization now grow without automatic pruning. Owner-controlled archival is a future, separately validated decision; no target-device storage, concurrency or power-loss guarantee. See [decision M-008](./DEV_NOTES.md#decision-m-008--never-prune-saved-sessions-implicitly).
+
 ## Unreleased · M7 strict generated-memory save preflight
 
 - Validate and serialize the complete in-memory state with standard JSON numbers before creating `.tmp`, refusing generated NaN/Infinity instead of publishing a state the next strict loader cannot read.
