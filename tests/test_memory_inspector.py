@@ -74,6 +74,50 @@ class ReadOnlyInspectorTests(unittest.TestCase):
             self._write(temp, [{"a": 3}], kept=True)
             self.assertEqual(inspector.inspect(str(state))["relationship"], "divergent")
 
+    def test_distinct_json_scalar_types_and_numbers_never_look_equivalent(self):
+        # Real precision/type losses in json.loads + Python equality formerly
+        # made distinct copied generations appear equivalent.
+        cases = [
+            ('{"sessions":[{"score":0.10000000000000001}]}',
+             '{"sessions":[{"score":0.1}]}'),
+            ('{"sessions":[{"score":1e-400}]}',
+             '{"sessions":[{"score":0.0}]}'),
+            ('{"sessions":[{"score":1e400}]}',
+             '{"sessions":[{"score":1e401}]}'),
+            ('{"sessions":[{"flag":true}]}',
+             '{"sessions":[{"flag":1}]}'),
+            ('{"sessions":[{"flag":"1"}]}',
+             '{"sessions":[{"flag":1}]}'),
+            ('{"sessions":[],"flag":true}',
+             '{"sessions":[],"flag":1}'),
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            state = pathlib.Path(d) / "state.json"
+            temp = pathlib.Path(str(state) + ".tmp")
+            for left, right in cases:
+                with self.subTest(left=left, right=right):
+                    state.write_text(left, encoding="utf-8")
+                    temp.write_text(right, encoding="utf-8")
+                    before = (state.read_bytes(), temp.read_bytes())
+                    result = inspector.inspect(str(state))
+                    self.assertEqual(result["primary"]["status"], "valid")
+                    self.assertEqual(result["temporary"]["status"], "valid")
+                    self.assertEqual(result["relationship"], "divergent")
+                    self.assertEqual((state.read_bytes(), temp.read_bytes()), before)
+                    self.assertNotIn("score", json.dumps(result))
+
+    def test_session_prefix_requires_exact_numeric_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = pathlib.Path(d) / "state.json"
+            temp = pathlib.Path(str(state) + ".tmp")
+            state.write_text('{"sessions":[{"n":1e400}]}', encoding="utf-8")
+            temp.write_text('{"sessions":[{"n":1e401},{"n":2}]}', encoding="utf-8")
+            self.assertEqual(inspector.inspect(str(state))["relationship"], "divergent")
+            # A genuine prefix remains recognized, even with large numbers.
+            temp.write_text('{"sessions":[{"n":1e400},{"n":2}]}', encoding="utf-8")
+            self.assertEqual(inspector.inspect(str(state))["relationship"],
+                             "primary_sessions_prefix_of_temporary")
+
     def test_partial_malformed_and_duplicate_records_are_not_promoted(self):
         with tempfile.TemporaryDirectory() as d:
             state = pathlib.Path(d) / "state.json"
