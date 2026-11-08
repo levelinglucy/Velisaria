@@ -31,6 +31,25 @@ class MemoryIntegrityTests(unittest.TestCase):
             loaded = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(loaded["sessions"][0]["user"], "test-user")
 
+    def test_history_beyond_4000_sessions_preserves_earliest(self):
+        # Old log() silently discarded 1,501 earlier sessions at the first
+        # overflow. A valid next thought must not rewrite that loss to disk.
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            original = [{"marker": "earliest"}] + [
+                {"sequence": i} for i in range(1, 4000)
+            ]
+            path.write_text(json.dumps({"sessions": original}), encoding="utf-8")
+            memory = mod.Memory(str(path))
+            memory.log("synthetic", "new message", "response", {})
+            memory.save()
+
+            reloaded = mod.Memory(str(path)).state["sessions"]
+            self.assertEqual(len(reloaded), 4001)
+            self.assertEqual(reloaded[:4000], original)
+            self.assertEqual(reloaded[-1]["text"], "new message")
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
     def test_truncated_json_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as d:
             path = pathlib.Path(d) / "state.json"
