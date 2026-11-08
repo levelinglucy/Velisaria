@@ -212,6 +212,66 @@ class MemoryIntegrityTests(unittest.TestCase):
             self.assertEqual(len(json.loads((pathlib.Path(d) / "sanctified_state.json").read_text())["sessions"]), 1)
 
 
+    def test_stale_second_instance_cannot_replace_newer_saved_session(self):
+        # Two readers start from the same bytes. The second may not silently
+        # replace a history committed after its own original load.
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            path.write_text('{"sessions":[{"marker":"original"}]}', encoding="utf-8")
+            first = mod.Memory(str(path))
+            second = mod.Memory(str(path))
+            first.state["sessions"].append({"marker": "first writer"})
+            first.save()
+            committed = path.read_bytes()
+            second.state["sessions"].append({"marker": "stale writer"})
+            with self.assertRaisesRegex(RuntimeError, "changed since load"):
+                second.save()
+            self.assertEqual(path.read_bytes(), committed)
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+    def test_stale_new_install_cannot_replace_another_first_save(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            first = mod.Memory(str(path))
+            second = mod.Memory(str(path))
+            first.state["sessions"].append({"marker": "created first"})
+            first.save()
+            committed = path.read_bytes()
+            second.state["sessions"].append({"marker": "not yet saved"})
+            with self.assertRaisesRegex(RuntimeError, "changed since load"):
+                second.save()
+            self.assertEqual(path.read_bytes(), committed)
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+    def test_external_edit_after_load_is_preserved_and_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            path.write_text('{"sessions":[{"marker":"original"}]}', encoding="utf-8")
+            memory = mod.Memory(str(path))
+            newer = b'{"sessions":[{"marker":"external change"}]}'
+            path.write_bytes(newer)
+            memory.state["sessions"].append({"marker": "outdated"})
+            with self.assertRaisesRegex(RuntimeError, "changed since load"):
+                memory.save()
+            self.assertEqual(path.read_bytes(), newer)
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+    def test_repeated_saves_by_one_instance_and_crlf_input_remain_valid(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "state.json"
+            path.write_bytes(b'{\r\n  "sessions": []\r\n}')
+            memory = mod.Memory(str(path))
+            memory.state["sessions"].append({"marker": "one"})
+            memory.save()
+            memory.state["sessions"].append({"marker": "two"})
+            memory.save()
+            self.assertEqual(
+                [x["marker"] for x in mod.Memory(str(path)).state["sessions"]],
+                ["one", "two"],
+            )
+            self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+
 
 class InterruptedSaveTests(unittest.TestCase):
     """Disposable state only: test exceptions and actual process termination before rename."""
