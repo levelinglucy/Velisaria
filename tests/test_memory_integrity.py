@@ -67,8 +67,8 @@ class MemoryIntegrityTests(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), original)
                 self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
 
-    def test_nonstandard_json_numbers_cannot_enter_live_history(self):
-        for constant in ("NaN", "Infinity", "-Infinity"):
+    def test_nonfinite_json_numbers_cannot_enter_live_history(self):
+        for constant in ("NaN", "Infinity", "-Infinity", "1e400", "-1e400"):
             original = ('{"sessions":[{"metrics":{"score":' + constant + '}}]}').encode()
             with self.subTest(constant=constant), tempfile.TemporaryDirectory() as d:
                 path = pathlib.Path(d) / "state.json"
