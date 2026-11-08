@@ -78,6 +78,44 @@ class MemoryIntegrityTests(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), original)
                 self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
 
+    def test_precision_losing_finite_decimals_refuse_before_save(self):
+        # Ordinary finite float decoding can round a legitimate JSON number;
+        # a subsequent normal save would permanently erase that distinction.
+        samples = (
+            "0.10000000000000001",
+            "1.0000000000000001",
+            "-1.0000000000000001",
+            "1e-400",
+            "-1e-400",
+            "1.234567890123456789",
+        )
+        for literal in samples:
+            with self.subTest(literal=literal), tempfile.TemporaryDirectory() as d:
+                path = pathlib.Path(d) / "state.json"
+                original = ('{"sessions":[{"metrics":{"score":' + literal + '}}]}').encode()
+                path.write_bytes(original)
+                with self.assertRaisesRegex(RuntimeError, "left unchanged"):
+                    mod.Memory(str(path))
+                self.assertEqual(path.read_bytes(), original)
+                self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
+    def test_exactly_roundtrippable_finite_decimals_still_save(self):
+        # Alternate exponent/zero spellings are fine if their numeric value
+        # survives the live float representation and future JSON serialization.
+        from decimal import Decimal
+        for literal in ("0.1", "1.0", "1e0", "1e-320", "-0.0", "1.0000000000000002"):
+            with self.subTest(literal=literal), tempfile.TemporaryDirectory() as d:
+                path = pathlib.Path(d) / "state.json"
+                original = ('{"sessions":[{"metrics":{"score":' + literal + '}}]}').encode()
+                path.write_bytes(original)
+                m = mod.Memory(str(path))
+                m.state["sessions"].append({"marker": "new"})
+                m.save()
+                actual = json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal)
+                self.assertEqual(actual["sessions"][0]["metrics"]["score"], Decimal(literal))
+                self.assertEqual(actual["sessions"][1], {"marker": "new"})
+                self.assertFalse(pathlib.Path(str(path) + ".tmp").exists())
+
     def test_excessive_json_nesting_fails_closed_without_rewrite(self):
         # Reader exhaustion should be a controlled startup refusal, not an
         # unhandled RecursionError followed by a risky user workaround.
