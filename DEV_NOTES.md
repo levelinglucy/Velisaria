@@ -4,7 +4,7 @@
 
 **Purpose:** preserve local session history in the smaller Sanctified Monolith without changing the historical Covenant or archived monoliths. **Integration:** M1 corrupt-state and M2 interrupted-save preservation are merged maintenance candidates; the M3 read-only inspector is documented under **Unreleased**. PR history records integration and CI; none of this is a tagged stable release.
 
-**Current goal:** allow an owner to inspect *copies* of the primary and orphan `.tmp` files without overwriting either or showing session contents. **Latest implementation:** `inspect_memory_state.py` reports bounded validity and list-prefix relationships, and declines unsafe file types. **Next steps:** run isolated inspections against additional synthetic legacy shapes; seek relevant Pythonista/iPhone evidence; investigate manual recovery only if an evidence-backed procedure exists. **Limitations:** structural similarity does not prove chronology, completeness, power-cut durability or safe auto-restoration. [Changelog](./CHANGELOG.md) · [Inspector tests](./tests/test_memory_inspector.py) · [Memory tests](./tests/test_memory_integrity.py).
+**Current goal:** make copied-generation comparisons conservative enough that lost numeric precision or Python type coercion cannot declare different histories equivalent. **Latest candidate:** `inspect_memory_state.py` retains the exact spelling of JSON numbers and distinguishes them from strings/booleans when reporting equality or prefix relationships. **Integration:** candidate PR #6; merge only after exact-revision Python CI. **Next steps:** validate the full synthetic inspector/memory suite; optionally seek trusted Pythonista/iPhone inspection evidence; consider manual recovery only if independent evidence supports a safe procedure. **Limitations:** equality/prefix is not chronology, completeness, power-cut durability or permission to auto-restore. [Changelog](./CHANGELOG.md) · [Inspector tests](./tests/test_memory_inspector.py) · [Memory tests](./tests/test_memory_integrity.py).
 
 ## What was verified in original source (main e311e1b)
 
@@ -39,6 +39,16 @@ The monolith's CLI writes `sanctified_state.json` in the **current working direc
 - **Safety limits:** run against owner-made copies in an isolated directory, preferably with the writer stopped. A prefix is a *content relationship*, not proof that either file is newer or valid to promote. `equivalent_data` is parsed equality, not evidence of identical physical writes or durability. Counts are disclosed in local output. A file beyond 32 MiB, a symlink, missing `O_NOFOLLOW` support, malformed JSON or detected concurrent modification prevents a claim of valid inspection. Independent reads cannot form an atomic pair of snapshots.
 - **Compatibility:** standalone, stdlib-only; existing memory loading/saving and the persistent JSON schema are unchanged. No automatic recovery or stable-release claim is introduced.
 - **Revisit:** only after relevant owner-controlled evidence establishes a safe procedure for specific recovery scenarios; otherwise preserve both generations.
+
+## Decision M-004 · preserve evidence distinctions in JSON scalars
+
+**Observed predecessor:** default JSON parsing converted decimal and exponent literals to binary floats. Different copied histories such as `0.10000000000000001` versus `0.1`, or `1e400` versus `1e401`, compared equal after rounding or overflow to infinity. Python also equates `true` with integer `1`. The inspector could therefore classify different session records as `equivalent_data` or a clean prefix. This was reproduced with synthetic inputs, not a claim that actual owner records were damaged.
+
+**Options:** compare raw file bytes (safe but makes whitespace and object-key order material); use `decimal.Decimal` with explicit bool typing (numeric value comparisons still erase representation differences); or use **tagged number lexemes** during this read-only inspection (selected). JSON cannot directly produce Python tuples, so a private tuple tag distinguishes numeric literals from strings, booleans, arrays and objects; identical raw number tokens in reordered object keys still compare equal.
+
+**Benefit and cost:** avoids false recovery equivalence caused by numeric rounding, overflow or bool/int coercion. Numerically equivalent but differently written tokens, such as `1` and `1.0`, now classify as divergent. This conservatism is deliberate: the tool reports recorded-history agreement, not numeric value equivalence. Saved state format and live writer are untouched; the inspector never exposes the tokens in its report. No automatic recovery is introduced.
+
+**Acceptance:** synthetic regressions for precision, underflow, exponent overflow, bool-vs-number, string-vs-number and false prefixes report `divergent`; identical large-number prefixes still pass; all inspected files remain byte-identical. Reconsider normalizing numeric equivalence only if an evidence-backed recovery need makes it appropriate, with an explicit report contract and regression tests.
 
 ## Running safely
 
