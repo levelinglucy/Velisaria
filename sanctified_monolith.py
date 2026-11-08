@@ -480,12 +480,17 @@ class Memory:
         self.state = loaded
 
     def save(self):
+        # Validate the complete JSON representation before creating any staging
+        # file. A serialization error must not orphan a partial .tmp, and the
+        # next strict loader must never inherit nonstandard NaN/Infinity tokens.
+        # A real interrupted file write/rename still leaves .tmp as evidence.
+        serialized = json.dumps(self.state, indent=2, allow_nan=False)
         tmp = self.path + ".tmp"
         try:
             # Exclusive creation also prevents a running process from clobbering
             # an orphan left by an earlier interrupted write.
             with open(tmp, "x", encoding="utf-8") as f:
-                json.dump(self.state, f, indent=2)
+                f.write(serialized)
         except FileExistsError as exc:
             raise RuntimeError(
                 "Velisaria temporary memory state at {!r} already exists; "
