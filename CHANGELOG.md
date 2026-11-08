@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M4 conservative memory-generation comparison
+
+- Fixed false equivalence/prefix reports in copied JSON state when binary float parsing rounded or overflowed distinct recorded numbers, or Python equated JSON booleans with numbers.
+- Inspector comparisons preserve exact numeric tokens behind an internal type tag. Equal-value spellings (e.g. `1` versus `1.0`) may now conservatively report divergence; primary and temporary files, live memory formats and historical sources remain unchanged.
+- Added disposable type/precision/prefix regressions; recovery remains manual and inspection-only. See [decision M-004](./DEV_NOTES.md#decision-m-004--preserve-evidence-distinctions-in-json-scalars) and PR #6 for exact validation.
+
 ## Unreleased · M3 read-only state inspection
 
 - Added standalone stdlib `inspect_memory_state.py --state PATH` to inspect copied primary and adjacent `.tmp` histories. It does not change memory files, promote either generation, or print session contents.

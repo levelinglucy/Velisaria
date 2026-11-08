@@ -27,6 +27,15 @@ def _reject_constant(value):
     raise ValueError("non-standard JSON constant")
 
 
+def _json_number_token(token):
+    """Keep number spelling and type distinct for conservative copy comparisons.
+
+    No JSON value becomes a Python tuple, so tagged tuples cannot collide
+    with JSON strings, booleans, arrays or objects when comparing histories.
+    """
+    return ("json-number", token)
+
+
 def _inspect(path):
     """Return metadata and a private decoded value, without writing anything."""
     try:
@@ -73,6 +82,8 @@ def _inspect(path):
             raw.decode("utf-8"),
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
+            parse_int=_json_number_token,
+            parse_float=_json_number_token,
         )
     except (UnicodeError, ValueError, RecursionError):
         return {"status": "invalid_json"}, None
