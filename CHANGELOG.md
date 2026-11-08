@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M5 strict live-memory JSON load
+
+- Refuse ambiguous primary memory state containing duplicate object keys (including nested session fields) instead of silently accepting the last value and potentially overwriting lost history on the next save.
+- Reject nonstandard JSON constants, nonfinite float overflows and excessive parser nesting with a clear startup error; preserve original bytes and adjacent temporary evidence for owner investigation.
+- Added isolated, byte-preservation regressions and documented availability/compatibility trade-offs in [decision M-005](./DEV_NOTES.md#decision-m-005--refuse-ambiguous-json-before-live-memory-rewrite); exact validation and integration belong to [PR #7](https://github.com/levelinglucy/Velisaria/pull/7). Valid JSON state schema and archived originals remain unchanged.
+
 ## Unreleased · M4 conservative memory-generation comparison
 
 - Fixed false equivalence/prefix reports in copied JSON state when binary float parsing rounded or overflowed distinct recorded numbers, or Python equated JSON booleans with numbers.
