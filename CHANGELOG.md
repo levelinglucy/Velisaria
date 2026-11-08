@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M6 finite numeric history fidelity
+
+- Reject saved finite JSON decimals whose numeric value would be rounded or underflowed by the live float loader and next standard JSON save; do not overwrite contested original history.
+- Preserve ordinary float runtime types, the existing file schema and numerically equivalent spellings such as `1e0` and `1.0`; this is numeric-value protection, **not** original number-token preservation or automatic repair.
+- Added disposable loss/compatibility regressions. See [decision M-006](./DEV_NOTES.md#decision-m-006--reject-lossy-finite-decimal-rewrites) and [PR #8](https://github.com/levelinglucy/Velisaria/pull/8) for evidence. No stable or target-device release claimed.
+
 ## Unreleased · M5 strict live-memory JSON load
 
 - Refuse ambiguous primary memory state containing duplicate object keys (including nested session fields) instead of silently accepting the last value and potentially overwriting lost history on the next save.
