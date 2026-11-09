@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M15 reproducible MotionForge input features
+
+- Derive MotionForge's local 32-bit random seed from SHA-256 of UTF-8 input rather than process-randomized Python `hash(text)`; the same text now yields identical motion vectors across independently launched Python processes with different hash seeds.
+- Add isolated subprocess and independently computed seed regressions; no session-memory schema, owner data, empathy calculations or archived sources change. Evidence and exact validation: [PR #17](https://github.com/levelinglucy/Velisaria/pull/17).
+- Existing motion vectors intentionally change; this is not a guarantee of complete session replay or cross-interpreter RNG compatibility. See [decision M-015](./DEV_NOTES.md#decision-m-015--stable-input-derived-motion-seed).
+
 ## Unreleased · M14 release removed profile overrides
 
 - Treat each successfully validated hot-reloaded profile as the complete override set: omitted bias, gain and lexicon settings return to built-in defaults instead of retaining stale custom values.
