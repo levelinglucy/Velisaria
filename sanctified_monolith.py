@@ -67,7 +67,7 @@ class ProfileLoader:
     def __init__(self, path: str = None):
         self.path = path
         self.profile = {}
-        self._mtime = None
+        self._stamp = None  # Last successfully loaded stat signature.
 
     @staticmethod
     def _validate(profile):
@@ -123,9 +123,20 @@ class ProfileLoader:
             return {}
         try:
             st = os.stat(p)
-            if self._mtime is None or st.st_mtime > self._mtime:
-                self.profile = self._read(p)
-                self._mtime = st.st_mtime
+            # A profile restored from backup may have an older timestamp.
+            # Nanosecond mtime, size and inode catch timestamp-preserving
+            # replacements where the filesystem exposes that information.
+            # An in-place same-size edit preserving all metadata remains
+            # undetectable without hashing the file on every request.
+            stamp = (
+                getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000)),
+                st.st_size,
+                getattr(st, "st_ino", None),
+            )
+            if self._stamp != stamp:
+                loaded = self._read(p)  # Validate completely before committing.
+                self.profile = loaded
+                self._stamp = stamp
         except Exception:
             # keep last good profile
             pass
