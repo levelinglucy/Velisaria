@@ -1,5 +1,12 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M11 profile replacement detection
+
+- Detect profile changes by nanosecond modification timestamp, size and available inode instead of requiring a *later* timestamp; restored older configurations and atomic equal-size replacements can now reload.
+- Retain all-or-nothing validation and last-good fallback after a malformed replacement; no existing memory state files or archived monoliths are rewritten. [PR #13](https://github.com/levelinglucy/Velisaria/pull/13) owns disposable regressions and exact-commit checks.
+- Metadata-preserving in-place same-size edits can remain invisible; no power-loss, iPhone/Pythonista, concurrent modification or profile authenticity guarantee. See [decision M-011](./DEV_NOTES.md#decision-m-011--reload-replaced-profiles-even-with-non-increasing-mtime).
+
+
 ## Unreleased · M10 empathy profile validation
 
 - Validate supported profile sections and settings before caching an incoming profile, preventing malformed JSON from crashing later empathy processing or partially updating a live core.
