@@ -1,5 +1,12 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M16 strict empathy-profile JSON decoding
+
+- Refuse duplicate JSON keys at any depth and nonstandard `NaN`/`Infinity` literals before applying a profile; previously a duplicate `curiosity_bias` silently selected its last value.
+- Keep the last validated profile or defaults after an invalid replacement; ordinary standard JSON, partial overrides, existing memory format and historical monoliths are unchanged.
+- Add synthetic test-first hot-reload, nested-key and unused-field regressions, with seven predecessor subcase failures on each Python 3.11/3.12. Exact candidate and integration evidence: [PR #18](https://github.com/levelinglucy/Velisaria/pull/18), [decision M-016](./DEV_NOTES.md#decision-m-016--reject-ambiguous-json-before-profile-activation).
+- Previously accepted ambiguous/nonstandard profile files will require owner review and correction; unknown *standard* JSON keys remain accepted. This does not establish iPhone, profile authenticity, race or power-loss guarantees.
+
 ## Unreleased · M15 reproducible MotionForge input features
 
 - Derive MotionForge's local 32-bit random seed from SHA-256 of UTF-8 input rather than process-randomized Python `hash(text)`; the same text now yields identical motion vectors across independently launched Python processes with different hash seeds.
