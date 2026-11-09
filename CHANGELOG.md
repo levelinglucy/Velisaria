@@ -1,5 +1,12 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M14 release removed profile overrides
+
+- Treat each successfully validated hot-reloaded profile as the complete override set: omitted bias, gain and lexicon settings return to built-in defaults instead of retaining stale custom values.
+- Preserve the same live EmpathyCore object, cached last-good configuration on malformed/unreadable replacement, partial profile support, saved-session schema and historical sources.
+- Add disposable partial/empty reload regressions after reproducing two failures against the predecessor on CPython 3.11/3.12. Exact evidence: [PR #16](https://github.com/levelinglucy/Velisaria/pull/16) and [decision M-014](./DEV_NOTES.md#decision-m-014--removed-profile-overrides-revert-to-defaults).
+- This intentionally changes behaviour when owners remove overrides; same-metadata in-place edits, iPhone and concurrent/power-loss semantics remain unverified.
+
 ## Unreleased · M13 use live empathy in refinement
 
 - Run a provisional empathy pass before refinement and recompute its final weight after RTE stability scoring. Refined text now shows actual input/profile warmth, tension and curiosity rather than hard-coded fallback values.
