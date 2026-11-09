@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M13 use live empathy in refinement
+
+- Run a provisional empathy pass before refinement and recompute its final weight after RTE stability scoring. Refined text now shows actual input/profile warmth, tension and curiosity rather than hard-coded fallback values.
+- Add disposable end-to-end default/custom-profile tests, checking the displayed refinement and the logged stability-based weight. Preserve the existing session schema and archived monoliths; [PR #15](https://github.com/levelinglucy/Velisaria/pull/15) owns exact candidate validation.
+- The extra empathy evaluation adds small per-thought work; RTE remains a formatting/stability model. No iPhone, concurrent-write, or power-loss guarantee. [Decision M-013](./DEV_NOTES.md#decision-m-013--feed-live-empathy-to-refinement-then-finalize-weight).
+
 ## Unreleased · M12 resonance lexicon normalization
 
 - Normalize incoming text for resonance terms using the existing empathy lowercase input, so capitalized and mixed-case occurrences of built-in or custom multiword phrases now contribute equally to curiosity.
