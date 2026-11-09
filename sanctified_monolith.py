@@ -283,7 +283,10 @@ class MotionForge:
     def boot(self, config: Dict[str, Any]): pass
 
     def _seed(self, text: str, n=160):
-        r = random.Random(hash(text) & ((1<<32)-1))
+        # Python's hash(text) is salted per process, so it cannot serve as
+        # replayable input. Use a stable 32-bit digest-derived seed instead.
+        seed = int.from_bytes(hashlib.sha256(text.encode("utf-8")).digest()[:4], "big")
+        r = random.Random(seed)
         return [r.randint(0,1) for _ in range(n)]
 
     def _chunks(self, bits: List[int], k=8) -> List[int]:
