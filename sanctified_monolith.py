@@ -654,11 +654,20 @@ class Monolith:
         if profile_path:
             self.profile.load(profile_path)
             self.profile.apply_to_empathy(self.empathy)
+        # Only a newly validated profile may release previously active overrides.
+        self._applied_profile_stamp = self.profile._stamp
 
     def think(self, user: str, text: str) -> str:
-        # hot‑reload profile if present, apply partial deltas safely
+        # A valid replacement defines the complete current override set.
+        # Reset omitted fields to fresh defaults without replacing the live core;
+        # invalid/missing replacements retain the last valid profile unchanged.
         if getattr(self, "profile", None) and self.profile.path:
-            self.profile.load()  # refresh if mtime changed
+            self.profile.load()
+            if self.profile._stamp != self._applied_profile_stamp:
+                defaults = EmpathyCore()
+                for name, value in vars(defaults).items():
+                    setattr(self.empathy, name, value)
+                self._applied_profile_stamp = self.profile._stamp
             self.profile.apply_to_empathy(self.empathy, allow_partial=True)
 
         ctx = new_ctx(user, text)
