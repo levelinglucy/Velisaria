@@ -204,7 +204,7 @@ class EmpathyCore:
         warmth_raw   = self._hits(t, self.pos_terms) / 6.0
         tension_raw  = self._hits(t, self.neg_terms) / 6.0
         curiosity_raw= self._hits(t, self.cur_terms) / 5.0
-        resonance_raw= self._hits(text, self.res_terms) / 4.0
+        resonance_raw= self._hits(t, self.res_terms) / 4.0
 
         warmth   = _clamp(self.compassion_bias + 0.45*warmth_raw - 0.15*tension_raw, 0.0, 1.0)
         tension  = _clamp(self.stability_bias   + 0.50*tension_raw - 0.10*warmth_raw, 0.0, 1.0)

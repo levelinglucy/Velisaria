@@ -1,5 +1,12 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M12 resonance lexicon normalization
+
+- Normalize incoming text for resonance terms using the existing empathy lowercase input, so capitalized and mixed-case occurrences of built-in or custom multiword phrases now contribute equally to curiosity.
+- Add synthetic default/custom profile tests and non-resonance invariants; no memory schema, stored owner data or archived monoliths change. The improved direct affect score does not independently verify the separate refiner-stage order.
+- Preserve the previous substring/Unicode matching limitations. [PR #14](https://github.com/levelinglucy/Velisaria/pull/14) holds revision-specific checks and [M-012](./DEV_NOTES.md#decision-m-012--normalize-resonance-input-like-other-empathy-lexicons) records the decision.
+
+
 ## Unreleased · M11 profile replacement detection
 
 - Detect profile changes by nanosecond modification timestamp, size and available inode instead of requiring a *later* timestamp; restored older configurations and atomic equal-size replacements can now reload.
