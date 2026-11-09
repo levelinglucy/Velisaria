@@ -665,6 +665,10 @@ class Monolith:
 
         self.mem.step(ctx)
         self.motion.step(ctx)
+        # RTE needs the live text/profile affect, but its stability score is
+        # needed for the final empathy weight. Score affect provisionally,
+        # refine with it, then recompute weight from RTE's actual base score.
+        self.empathy.step(ctx)
         self.rte.step(ctx)
         self.empathy.step(ctx)
         self.mesh.step(ctx)
