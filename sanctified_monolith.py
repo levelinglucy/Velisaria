@@ -112,9 +112,28 @@ class ProfileLoader:
                 raise ValueError("profile terms.{} must be an array of strings".format(key))
         return profile
 
+    @staticmethod
+    def _unique_profile_object(pairs):
+        # JSON's default last-key-wins parser can silently discard a setting
+        # even in a nested or currently unrecognized profile section.
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate profile JSON key: {!r}".format(key))
+            result[key] = value
+        return result
+
+    @staticmethod
+    def _reject_profile_constant(token):
+        raise ValueError("nonstandard profile JSON number: {}".format(token))
+
     def _read(self, p: str):
         with open(p, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
+            loaded = json.load(
+                f,
+                object_pairs_hook=self._unique_profile_object,
+                parse_constant=self._reject_profile_constant,
+            )
         return self._validate(loaded)
 
     def load(self, path: str = None):
