@@ -515,6 +515,18 @@ class Memory:
         self._loaded_digest = None
         self.load()
 
+    def _refuse_primary_symlink(self):
+        # A symlink may be read through, but os.replace(tmp, path) replaces
+        # the link itself rather than updating its target. Without this guard,
+        # a successful save silently forks history into two different files.
+        # This is a bounded final-component check, not a multiwriter lock.
+        if os.path.islink(self.path):
+            raise RuntimeError(
+                "Velisaria primary memory path {!r} is a symbolic link; "
+                "file left unchanged. Point to the actual regular file "
+                "rather than its alias.".format(self.path)
+            )
+
     def load(self):
         """Load session history, refusing unresolved temporary recovery evidence.
 
@@ -529,6 +541,7 @@ class Memory:
                 "Back up both state and temporary files, then investigate copies "
                 "before restarting.".format(tmp)
             )
+        self._refuse_primary_symlink()
         try:
             with open(self.path, "rb") as f:
                 source_bytes = f.read()
@@ -562,6 +575,7 @@ class Memory:
         self._loaded_digest = hashlib.sha256(source_bytes).digest()
 
     def save(self):
+        self._refuse_primary_symlink()
         # Validate the complete JSON representation before creating any staging
         # file. A serialization error must not orphan a partial .tmp, and the
         # next strict loader must never inherit nonstandard NaN/Infinity tokens.

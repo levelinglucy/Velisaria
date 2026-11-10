@@ -1,5 +1,12 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M17 refuse symlinked primary memory state
+
+- Refuse a symbolic link used as the final-component primary state path both at load and immediately before save; the prior writer read through the link and then renamed over the link itself, silently splitting histories.
+- Keep both the alias and its target unchanged on refusal. Direct regular-file saving and the memory JSON format remain intact. Owners using a symlink must point to the actual state file instead; the historical monoliths are untouched.
+- Add disposable test-first startup and post-load substitution regressions, plus direct-file compatibility coverage. Both failures reproduced on the predecessor on Python 3.11/3.12 ([red CI](https://github.com/levelinglucy/Velisaria/actions/runs/42727711848)). Candidate integration evidence belongs to [PR #19](https://github.com/levelinglucy/Velisaria/pull/19).
+- This is not a race-free filesystem transaction or proof of power-loss, multiwriter, parent-directory symlink or iPhone safety. See [decision M-017](./DEV_NOTES.md#decision-m-017--prevent-history-split-through-a-symlinked-primary).
+
 ## Unreleased · M16 strict empathy-profile JSON decoding
 
 - Refuse duplicate JSON keys at any depth and nonstandard `NaN`/`Infinity` literals before applying a profile; previously a duplicate `curiosity_bias` silently selected its last value.
