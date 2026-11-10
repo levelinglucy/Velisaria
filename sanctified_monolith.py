@@ -19,7 +19,7 @@ Run:
 """
 
 import hashlib
-import json, os, re, time, uuid, random, math, sys
+import json, os, re, time, uuid, random, math, stat, sys
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, List
@@ -515,16 +515,30 @@ class Memory:
         self._loaded_digest = None
         self.load()
 
-    def _refuse_primary_symlink(self):
-        # A symlink may be read through, but os.replace(tmp, path) replaces
-        # the link itself rather than updating its target. Without this guard,
-        # a successful save silently forks history into two different files.
-        # This is a bounded final-component check, not a multiwriter lock.
-        if os.path.islink(self.path):
+    def _validate_primary_file_kind(self):
+        # Inspect before blocking open(): FIFOs can otherwise stall forever,
+        # and devices or sockets are not safe state files. os.replace() would
+        # also replace the final symlink rather than updating its referent.
+        # This final-component check is not atomic against a concurrent swap.
+        try:
+            mode = os.lstat(self.path).st_mode
+        except FileNotFoundError:
+            return  # A genuinely absent primary is permitted for first launch.
+        except OSError as exc:
+            raise RuntimeError(
+                "Cannot inspect Velisaria primary memory file; "
+                "file left unchanged."
+            ) from exc
+        if stat.S_ISLNK(mode):
             raise RuntimeError(
                 "Velisaria primary memory path {!r} is a symbolic link; "
                 "file left unchanged. Point to the actual regular file "
                 "rather than its alias.".format(self.path)
+            )
+        if not stat.S_ISREG(mode):
+            raise RuntimeError(
+                "Velisaria primary memory path {!r} is not a regular file; "
+                "special file or directory left unchanged.".format(self.path)
             )
 
     def load(self):
@@ -541,7 +555,7 @@ class Memory:
                 "Back up both state and temporary files, then investigate copies "
                 "before restarting.".format(tmp)
             )
-        self._refuse_primary_symlink()
+        self._validate_primary_file_kind()
         try:
             with open(self.path, "rb") as f:
                 source_bytes = f.read()
@@ -575,7 +589,7 @@ class Memory:
         self._loaded_digest = hashlib.sha256(source_bytes).digest()
 
     def save(self):
-        self._refuse_primary_symlink()
+        self._validate_primary_file_kind()
         # Validate the complete JSON representation before creating any staging
         # file. A serialization error must not orphan a partial .tmp, and the
         # next strict loader must never inherit nonstandard NaN/Infinity tokens.

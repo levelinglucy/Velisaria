@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M18 regular-file memory contract
+
+- Reject named pipes, directories and other non-regular primary memory paths before their blocking read or save verification; preserve ordinary absent-file initialization, regular-file storage and explicit symlink refusal.
+- Add synthetic test-first FIFO load/post-load substitution and directory regressions. The predecessor had three failures per Python 3.11/3.12 (two child-process timeouts); candidate evidence and integration status belong to [PR #20](https://github.com/levelinglucy/Velisaria/pull/20).
+- Require a direct regular-file state path; special-file configurations that previously blocked or failed now refuse early without altering the path or adjacent staging file. This is not race-free against concurrent replacement; see [decision M-018](./DEV_NOTES.md#decision-m-018--refuse-non-regular-primary-memory-files).
+
 ## Unreleased · M17 refuse symlinked primary memory state
 
 - Refuse a symbolic link used as the final-component primary state path both at load and immediately before save; the prior writer read through the link and then renamed over the link itself, silently splitting histories.
