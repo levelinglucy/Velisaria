@@ -27,6 +27,6 @@ This Covenant is not enforceable by law. It is enforceable by honor.
 
 ## Development · Sanctified Monolith source
 
-The smaller `sanctified_monolith.py` preserves local history by refusing damaged state or leftover `.tmp` evidence. `inspect_memory_state.py` can inspect **owner-made copies** without changing the data or choosing a recovery file. This does not change the Covenant or the archived monoliths.
+The smaller `sanctified_monolith.py` preserves local history by refusing damaged state, leftover `.tmp` evidence, and **symbolic links used as the memory state filename** (which could silently split history when saved). Use the actual regular-file path for state; do not delete or overwrite an existing alias to work around the refusal. `inspect_memory_state.py` can inspect **owner-made copies** without changing the data or choosing a recovery file. This does not change the Covenant or the archived monoliths.
 
 [Developer notes and recovery limits](./DEV_NOTES.md) · [Change history](./CHANGELOG.md) · [Synthetic tests](./tests/)
