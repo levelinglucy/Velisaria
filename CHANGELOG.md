@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M20 failed-memory-publication rollback
+
+- Discard a request's newly appended **in-memory** session if its memory save fails, rather than silently including that rejected turn in a later successful publication. The original error is propagated and committed on-disk history remains unchanged.
+- Preserve unresolved `.tmp` evidence and existing stale-writer protection; add disposable synthetic failure, stale-writer and failed-rename regression cases. Decision and revision-specific evidence: [M-020](./DEV_NOTES.md#decision-m-020--rejected-save-must-not-queue-a-phantom-session), [PR #22](https://github.com/levelinglucy/Velisaria/pull/22).
+- This does not revert mesh/governance dynamics, create a cross-process transaction or prove iPhone/power-loss durability. Existing session schema, normal successful output and historical source files remain unchanged.
+
 ## Unreleased · M19 CLI option validation
 
 - Parse the existing `--profile` and `--origin-io` flags strictly before initializing history; missing values and unknown options now exit 2 with a usage error rather than silently running in an unintended mode.
