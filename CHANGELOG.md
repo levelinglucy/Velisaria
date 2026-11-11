@@ -1,5 +1,11 @@
 # Sanctified Monolith · change history
 
+## Unreleased · M19 CLI option validation
+
+- Parse the existing `--profile` and `--origin-io` flags strictly before initializing history; missing values and unknown options now exit 2 with a usage error rather than silently running in an unintended mode.
+- Add safe `--help`, plus synthetic CLI subprocess regressions preserving valid combined flags and confirming no state files are created by errors/help. Test-only precursor failed six cases per Python 3.11/3.12; evidence and limits: [PR #21](https://github.com/levelinglucy/Velisaria/pull/21), [decision M-019](./DEV_NOTES.md#decision-m-019--refuse-invalid-cli-flags-before-state-initialization).
+- Previously ignored stray flags now cause an explicit error, potentially requiring caller corrections. No memory schema, archived source, profile validation policy or iPhone support changes.
+
 ## Unreleased · M18 regular-file memory contract
 
 - Reject named pipes, directories and other non-regular primary memory paths before their blocking read or save verification; preserve ordinary absent-file initialization, regular-file storage and explicit symlink refusal.

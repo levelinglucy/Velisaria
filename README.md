@@ -27,6 +27,8 @@ This Covenant is not enforceable by law. It is enforceable by honor.
 
 ## Development · Sanctified Monolith source
 
+Run `python3 sanctified_monolith.py --help` for supported launch options. Unknown flags or missing `--profile` values now stop with a usage error before any history is opened; do not rely on previously ignored options.
+
 The smaller `sanctified_monolith.py` preserves local history by refusing damaged state, leftover `.tmp` evidence, symbolic links used as the memory filename (which could split history), and special files such as named pipes (which could block indefinitely). Use a **direct regular-file path** for state; do not delete or overwrite existing state or aliases to work around a refusal. `inspect_memory_state.py` can inspect **owner-made copies** without changing the data or choosing a recovery file. This does not change the Covenant or the archived monoliths.
 
 [Developer notes and recovery limits](./DEV_NOTES.md) · [Change history](./CHANGELOG.md) · [Synthetic tests](./tests/)

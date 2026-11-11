@@ -18,6 +18,7 @@ Run:
   python3 sanctified_monolith.py --profile room_profile.json --origin-io
 """
 
+import argparse
 import hashlib
 import json, os, re, time, uuid, random, math, stat, sys
 from dataclasses import dataclass, field
@@ -753,21 +754,23 @@ class Monolith:
 # ========== CLI ==========
 
 def main():
-    # flags: --profile path.json, --origin-io
-    args = sys.argv[1:]
-    profile_path = None
-    origin_io = False
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a == "--profile" and i+1 < len(args):
-            profile_path = args[i+1]; i += 2; continue
-        if a == "--origin-io":
-            origin_io = True; i += 1; continue
-        i += 1
+    # Parse options before touching a memory file. Silently ignoring a
+    # misspelled mode or missing profile could create history with defaults.
+    parser = argparse.ArgumentParser(
+        description="Run the local Sanctified Monolith or JSON-lines adapter."
+    )
+    parser.add_argument(
+        "--profile", metavar="PATH",
+        help="optional JSON profile with empathy overrides",
+    )
+    parser.add_argument(
+        "--origin-io", action="store_true",
+        help="read JSON requests and write JSON responses on standard I/O",
+    )
+    options = parser.parse_args()
 
-    m = Monolith(profile_path=profile_path)
-    if origin_io:
+    m = Monolith(profile_path=options.profile)
+    if options.origin_io:
         OriginEngineAdapter(m).loop_stdio()
         return
 
