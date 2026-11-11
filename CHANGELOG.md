@@ -1,5 +1,13 @@
 # Sanctified Monolith · change history
 
+## Unreleased · review follow-up for requests, profiles and file synchronization
+
+- Decode JSON-lines and interactive `/memory` requests with the existing strict duplicate-key, numeric and nesting checks before sourced evidence can be written. Invalid request responses gain `error_code: "invalid_request"`; state/storage failures retain their separate handling.
+- Validate ordinary `think` user/context labels and UTF-8 text before live changes, consistently with learning enabled or disabled. Labels must be nonblank strings of at most 512 characters; empty/long thought text remains supported. Invalid labels previously accepted without learning now fail explicitly.
+- Skip non-regular optional profile paths before their blocking read, retaining defaults or the last valid profile. This prevents an existing FIFO from hanging startup/reload but does not close concurrent path-swap races.
+- Flush and `fsync` the exclusive temporary memory file before replacement; preserve primary bytes and `.tmp` evidence when synchronization fails. Precompute the new digest before publication. Post-replacement directory syncing remains deferred until callers distinguish unpublished failures from published-but-unconfirmed durability.
+- Add disposable request, profile-path and file-sync regressions. Record verified diagnostic-score limits and correct the obsolete `hash(text)` continuation note. See [development decisions](./DEV_NOTES.md#decision-m-021--validate-requests-before-any-live-change); no source-memory migration, numeric-model change or device/release certification.
+
 ## Unreleased · explicit associative recall and consolidation
 
 - Add the optional stdlib `associative_memory.py` journal and derived lookup table: exact user/context scope, normalized cues, source-linked answers, visible conflicts, explicit corrections and non-learning hypotheses.

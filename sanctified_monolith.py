@@ -143,6 +143,11 @@ class ProfileLoader:
             return {}
         try:
             st = os.stat(p)
+            # Optional profiles must be regular files before a blocking read.
+            # Symlinks to regular profiles remain supported. As with the
+            # memory preflight, a concurrent path swap is not prevented here.
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError("profile path must be a regular file")
             # A profile restored from backup may have an older timestamp.
             # Nanosecond mtime, size and inode catch timestamp-preserving
             # replacements where the filesystem exposes that information.
@@ -596,6 +601,7 @@ class Memory:
         # next strict loader must never inherit nonstandard NaN/Infinity tokens.
         # A real interrupted file write/rename still leaves .tmp as evidence.
         serialized = json.dumps(self.state, indent=2, allow_nan=False)
+        published_digest = hashlib.sha256(serialized.encode("utf-8")).digest()
         # Refuse to publish an old in-memory snapshot over a generation that
         # changed since our load/last save. This detects sequential stale
         # writers, not simultaneous writes racing between check and replace.
@@ -624,6 +630,10 @@ class Memory:
             # an orphan left by an earlier interrupted write.
             with open(tmp, "x", encoding="utf-8", newline="\n") as f:
                 f.write(serialized)
+                # Synchronization failures are still before publication: keep
+                # the primary and .tmp evidence for the existing rollback path.
+                f.flush()
+                os.fsync(f.fileno())
         except FileExistsError as exc:
             raise RuntimeError(
                 "Velisaria temporary memory state at {!r} already exists; "
@@ -631,7 +641,9 @@ class Memory:
                 "retrying.".format(tmp)
             ) from exc
         os.replace(tmp, self.path)
-        self._loaded_digest = hashlib.sha256(serialized.encode("utf-8")).digest()
+        self._loaded_digest = published_digest
+        # Directory fsync needs a distinct post-publication outcome: callers
+        # must not roll back live state after the primary has been replaced.
 
     def au_tier(self) -> int:
         n = len(self.state["sessions"])
@@ -661,14 +673,51 @@ class Memory:
 
 # ========== OriginEngineAdapter (I/O shim) ==========
 
+class InvalidRequest(ValueError):
+    """A rejected request, distinct from a state or storage failure."""
+
+
+def _decode_request(raw: str) -> Dict[str, Any]:
+    # Evidence must not enter through a more permissive parser than the state
+    # that will retain it. Reuse strict numeric, duplicate and nesting checks.
+    try:
+        _memory_check_nesting(raw)
+        payload = json.loads(
+            raw,
+            object_pairs_hook=_memory_unique_object,
+            parse_constant=_memory_reject_constant,
+            parse_float=_memory_finite_float,
+        )
+    except (TypeError, ValueError, OverflowError, RecursionError) as exc:
+        raise InvalidRequest("Malformed or ambiguous JSON request.") from exc
+    if not isinstance(payload, dict):
+        raise InvalidRequest("Expected a JSON request object.")
+    return payload
+
+
+def _request_string(value, name, maximum=None, allow_blank=False):
+    if (type(value) is not str or (not allow_blank and not value.strip())
+            or (maximum is not None and len(value) > maximum)):
+        requirement = "a string" if allow_blank else "a nonblank string"
+        if maximum is not None:
+            requirement += " of at most {} characters".format(maximum)
+        raise InvalidRequest("{} must be {}.".format(name, requirement))
+    try:
+        value.encode("utf-8")
+    except UnicodeError as exc:
+        raise InvalidRequest("{} must be valid UTF-8 text.".format(name)) from exc
+
+
 class OriginEngineAdapter:
     def __init__(self, monolith: 'Monolith'):
         self.m = monolith
 
     def handle(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(payload, dict):
-            raise ValueError("Expected a JSON request object.")
+            raise InvalidRequest("Expected a JSON request object.")
         operation = payload.get("op", "think")
+        if not isinstance(operation, str):
+            raise InvalidRequest("Request operation must be a string.")
         if operation != "think":
             result = self.m.learning_command(payload)
             return {"ok": True, "op": operation, "result": result,
@@ -689,8 +738,11 @@ class OriginEngineAdapter:
                 print("[origin-io] bye", flush=True)
                 break
             try:
-                payload = json.loads(line)
+                payload = _decode_request(line)
                 resp = self.handle(payload)
+            except InvalidRequest as e:
+                resp = {"ok": False, "error": str(e),
+                        "error_code": "invalid_request"}
             except Exception as e:
                 resp = {"ok": False, "error": str(e)}
             print(json.dumps(resp), flush=True)
@@ -730,38 +782,44 @@ class Monolith:
         Observations are owner-supplied evidence. Ordinary conversation and
         generated responses never automatically become training observations.
         """
-        if self.learner is None:
-            raise ValueError("Associative memory is disabled; enable --learning first.")
         if not isinstance(payload, dict):
-            raise ValueError("Expected a JSON request object.")
+            raise InvalidRequest("Expected a JSON request object.")
         operation = payload.get("op")
         if not isinstance(operation, str):
-            raise ValueError("Learning operation must be a string.")
+            raise InvalidRequest("Learning operation must be a string.")
+        if self.learner is None:
+            raise InvalidRequest("Associative memory is disabled; enable --learning first.")
         if operation == "learning-status":
             return self.learner.snapshot()
         if operation == "recall":
-            return self.learner.recall(
-                payload.get("user", "anon"), payload.get("context", "default"),
-                payload.get("cue"), mode=payload.get("mode", "combined"),
-                working_limit=payload.get("working_limit", 32),
-            )
+            try:
+                return self.learner.recall(
+                    payload.get("user", "anon"), payload.get("context", "default"),
+                    payload.get("cue"), mode=payload.get("mode", "combined"),
+                    working_limit=payload.get("working_limit", 32),
+                )
+            except ValueError as exc:
+                raise InvalidRequest(str(exc)) from exc
         if operation not in {"remember", "correct", "hypothesize", "sleep"}:
-            raise ValueError("Unknown learning operation.")
+            raise InvalidRequest("Unknown learning operation.")
 
         # Keep learned state and its journal cursor in the existing guarded
         # memory transaction. A refused write cannot publish live learning.
         candidate = type(self.learner)(self.learner.state)
-        if operation == "sleep":
-            result = candidate.consolidate(payload.get("max_events", 32))
-        else:
-            kind = {"remember": "observation", "correct": "correction",
-                    "hypothesize": "hypothesis"}[operation]
-            result = candidate.observe(
-                payload.get("user", "anon"), payload.get("context", "default"),
-                payload.get("cue"), payload.get("answer"), payload.get("source"),
-                event_id=payload.get("event_id"), kind=kind,
-                supersedes=payload.get("supersedes"),
-            )
+        try:
+            if operation == "sleep":
+                result = candidate.consolidate(payload.get("max_events", 32))
+            else:
+                kind = {"remember": "observation", "correct": "correction",
+                        "hypothesize": "hypothesis"}[operation]
+                result = candidate.observe(
+                    payload.get("user", "anon"), payload.get("context", "default"),
+                    payload.get("cue"), payload.get("answer"), payload.get("source"),
+                    event_id=payload.get("event_id"), kind=kind,
+                    supersedes=payload.get("supersedes"),
+                )
+        except ValueError as exc:
+            raise InvalidRequest(str(exc)) from exc
         if candidate.state != self.learner.state:
             previous = self.mem.state
             staged = dict(previous)
@@ -776,9 +834,14 @@ class Monolith:
         return result
 
     def think(self, user: str, text: str, context: str = "default") -> str:
+        # Apply the same contract in both modes, before profile reload or any
+        # live dynamics change. Do not coerce or normalize namespace labels.
+        _request_string(user, "user", maximum=512)
+        _request_string(context, "context", maximum=512)
+        _request_string(text, "text", allow_blank=True)
         recall = (self.learner.recall(user, context, text)
-                  if (self.learner is not None and isinstance(text, str)
-                      and text.strip() and len(text) <= 512) else None)
+                  if (self.learner is not None and text.strip()
+                      and len(text) <= 512) else None)
         # A valid replacement defines the complete current override set.
         # Reset omitted fields to fresh defaults without replacing the live core;
         # invalid/missing replacements retain the last valid profile unchanged.
@@ -897,7 +960,7 @@ def main():
             continue
         if options.learning and (s == "/sleep" or s.startswith("/memory ")):
             try:
-                request = {"op": "sleep"} if s == "/sleep" else json.loads(s[8:])
+                request = {"op": "sleep"} if s == "/sleep" else _decode_request(s[8:])
                 if isinstance(request, dict):
                     request.setdefault("user", "dylan")
                 print(json.dumps(m.learning_command(request), ensure_ascii=False))
