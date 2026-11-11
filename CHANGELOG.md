@@ -1,5 +1,12 @@
 # Sanctified Monolith · change history
 
+## Unreleased · explicit associative recall and consolidation
+
+- Add the optional stdlib `associative_memory.py` journal and derived lookup table: exact user/context scope, normalized cues, source-linked answers, visible conflicts, explicit corrections and non-learning hypotheses.
+- Enable with `--learning`; expose explicit JSON/interactive operations and use combined recall in ordinary responses. `--state PATH` selects the experiment's guarded state file.
+- Persist the derived table and consolidation cursor with raw evidence through the existing memory saver, publishing live learning only after a successful save. Duplicate event retries and empty sleep passes make no additional writes.
+- Add isolated persistence/failure tests and a deterministic sequential A/B demonstration with an equally informed archive baseline. The experiment tests associative retention, not neural or semantic generalization. See [usage](./ASSOCIATIVE_MEMORY.md) and [development decision](./DEV_NOTES.md#decision--make-associative-memory-affect-later-responses).
+
 ## Unreleased · M20 failed-memory-publication rollback
 
 - Discard a request's newly appended **in-memory** session if its memory save fails, rather than silently including that rejected turn in a later successful publication. The original error is propagated and committed on-disk history remains unchanged.

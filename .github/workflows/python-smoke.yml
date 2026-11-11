@@ -18,6 +18,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Compile entrypoint
-        run: python -m py_compile sanctified_monolith.py
+        run: python -m py_compile sanctified_monolith.py associative_memory.py examples/associative_memory_demo.py
       - name: Run isolated memory and CLI regressions
         run: python -m unittest discover -s tests -v
+      - name: Demonstrate sequential associative retention
+        run: python examples/associative_memory_demo.py

@@ -32,3 +32,5 @@ Run `python3 sanctified_monolith.py --help` for supported launch options. Unknow
 The smaller `sanctified_monolith.py` preserves local history by refusing damaged state, leftover `.tmp` evidence, symbolic links used as the memory filename (which could split history), and special files such as named pipes (which could block indefinitely). Use a **direct regular-file path** for state; do not delete or overwrite existing state or aliases to work around a refusal. `inspect_memory_state.py` can inspect **owner-made copies** without changing the data or choosing a recovery file. This does not change the Covenant or the archived monoliths.
 
 [Developer notes and recovery limits](./DEV_NOTES.md) · [Change history](./CHANGELOG.md) · [Synthetic tests](./tests/)
+
+Opt-in associative memory adds sourced recall, explicit corrections and bounded consolidation: [usage and isolated demonstration](./ASSOCIATIVE_MEMORY.md). Current development scope and next steps remain in [DEV_NOTES.md](./DEV_NOTES.md).
