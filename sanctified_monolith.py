@@ -666,9 +666,16 @@ class OriginEngineAdapter:
         self.m = monolith
 
     def handle(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("Expected a JSON request object.")
+        operation = payload.get("op", "think")
+        if operation != "think":
+            result = self.m.learning_command(payload)
+            return {"ok": True, "op": operation, "result": result,
+                    "snapshot": self.m.snapshot()}
         user = payload.get("user", "anon")
         text = payload.get("text", "")
-        out = self.m.think(user, text)
+        out = self.m.think(user, text, context=payload.get("context", "default"))
         snap = self.m.snapshot()
         return {"ok": True, "output": out, "snapshot": snap}
 
@@ -691,9 +698,18 @@ class OriginEngineAdapter:
 # ========== Monolith orchestrator ==========
 
 class Monolith:
-    def __init__(self, state_path="sanctified_state.json", profile_path: str = None):
+    def __init__(self, state_path="sanctified_state.json", profile_path: str = None,
+                 learning: bool = False):
         self.bus = EventBus()
         self.mem = Memory(state_path)
+        self.learner = None
+        if learning:
+            # The optional module is only needed when explicitly enabled.
+            from associative_memory import AssociativeMemory
+            if ("associative_memory" in self.mem.state
+                    and not isinstance(self.mem.state["associative_memory"], dict)):
+                raise ValueError("Invalid saved associative memory; preserve the state file.")
+            self.learner = AssociativeMemory(self.mem.state.get("associative_memory"))
         self.empathy = EmpathyCore()
         self.rte = RTE()
         self.motion = MotionForge()
@@ -708,7 +724,61 @@ class Monolith:
         # Only a newly validated profile may release previously active overrides.
         self._applied_profile_stamp = self.profile._stamp
 
-    def think(self, user: str, text: str) -> str:
+    def learning_command(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Run an explicit learning operation; publish changes only after save.
+
+        Observations are owner-supplied evidence. Ordinary conversation and
+        generated responses never automatically become training observations.
+        """
+        if self.learner is None:
+            raise ValueError("Associative memory is disabled; enable --learning first.")
+        if not isinstance(payload, dict):
+            raise ValueError("Expected a JSON request object.")
+        operation = payload.get("op")
+        if not isinstance(operation, str):
+            raise ValueError("Learning operation must be a string.")
+        if operation == "learning-status":
+            return self.learner.snapshot()
+        if operation == "recall":
+            return self.learner.recall(
+                payload.get("user", "anon"), payload.get("context", "default"),
+                payload.get("cue"), mode=payload.get("mode", "combined"),
+                working_limit=payload.get("working_limit", 32),
+            )
+        if operation not in {"remember", "correct", "hypothesize", "sleep"}:
+            raise ValueError("Unknown learning operation.")
+
+        # Keep learned state and its journal cursor in the existing guarded
+        # memory transaction. A refused write cannot publish live learning.
+        candidate = type(self.learner)(self.learner.state)
+        if operation == "sleep":
+            result = candidate.consolidate(payload.get("max_events", 32))
+        else:
+            kind = {"remember": "observation", "correct": "correction",
+                    "hypothesize": "hypothesis"}[operation]
+            result = candidate.observe(
+                payload.get("user", "anon"), payload.get("context", "default"),
+                payload.get("cue"), payload.get("answer"), payload.get("source"),
+                event_id=payload.get("event_id"), kind=kind,
+                supersedes=payload.get("supersedes"),
+            )
+        if candidate.state != self.learner.state:
+            previous = self.mem.state
+            staged = dict(previous)
+            staged["associative_memory"] = candidate.state
+            self.mem.state = staged
+            try:
+                self.mem.save()
+            except Exception:
+                self.mem.state = previous
+                raise
+            self.learner = candidate
+        return result
+
+    def think(self, user: str, text: str, context: str = "default") -> str:
+        recall = (self.learner.recall(user, context, text)
+                  if (self.learner is not None and isinstance(text, str)
+                      and text.strip() and len(text) <= 512) else None)
         # A valid replacement defines the complete current override set.
         # Reset omitted fields to fresh defaults without replacing the live core;
         # invalid/missing replacements retain the last valid profile unchanged.
@@ -724,6 +794,11 @@ class Monolith:
         ctx = new_ctx(user, text)
 
         self.mem.step(ctx)
+        if recall is not None:
+            # Keep the context thin; full evidence stays in the learner and is
+            # available through the explicit recall operation.
+            ctx["memory"]["recall_status"] = recall["status"]
+            ctx["memory"]["recall_evidence_count"] = len(recall["evidence_ids"])
         self.motion.step(ctx)
         # RTE needs the live text/profile affect, but its stability score is
         # needed for the final empathy weight. Score affect provisionally,
@@ -739,17 +814,38 @@ class Monolith:
                 f"temp:{ctx['govern']['super']['temperature']:.2f} align:{ctx['govern']['apn']['alignment']:.3f}" \
                 + (" [HALT]" if ctx['govern']['apn']['halt'] else "")
 
+        if recall is not None and recall["status"] == "recalled":
+            ids = recall["evidence_ids"]
+            evidence = ", ".join(ids[:8]) + (" ..." if len(ids) > 8 else "")
+            final = "Recall: {} [evidence: {}] || {}".format(
+                recall["answer"], evidence, final)
+        elif recall is not None and recall["status"] == "conflict":
+            final = "Recall conflict: {} active answers; inspect recall evidence. || {}".format(
+                len(recall["candidates"]), final)
+
+        # A refused save must not leave an uncommitted turn queued to be
+        # published by an unrelated later successful request.
+        prior_count = len(self.mem.state["sessions"])
         self.mem.log(user, text, final, ctx)
-        self.mem.save()
+        try:
+            self.mem.save()
+        except Exception:
+            # Preserve the save failure (including any on-disk .tmp evidence).
+            # Only discard the turn appended by this call in live memory.
+            del self.mem.state["sessions"][prior_count:]
+            raise
         ctx["final"] = {"text": final}
         return final
 
     def snapshot(self) -> Dict[str, Any]:
-        return {
+        result = {
             "memory": self.mem.snapshot(),
             "mesh": self.mesh.snapshot(),
             "govern": self.gov.snapshot()
         }
+        if self.learner is not None:
+            result["learning"] = self.learner.snapshot()
+        return result
 
 # ========== CLI ==========
 
@@ -767,14 +863,24 @@ def main():
         "--origin-io", action="store_true",
         help="read JSON requests and write JSON responses on standard I/O",
     )
+    parser.add_argument(
+        "--learning", action="store_true",
+        help="enable explicit associative recall and bounded consolidation",
+    )
+    parser.add_argument(
+        "--state", metavar="PATH", default="sanctified_state.json",
+        help="memory file path (default: sanctified_state.json)",
+    )
     options = parser.parse_args()
 
-    m = Monolith(profile_path=options.profile)
+    m = Monolith(state_path=options.state, profile_path=options.profile,
+                 learning=options.learning)
     if options.origin_io:
         OriginEngineAdapter(m).loop_stdio()
         return
 
-    print("Sanctified Monolith — merged. commands: /snap, /quit")
+    commands = "/snap, /quit" + (", /sleep, /memory JSON" if options.learning else "")
+    print("Sanctified Monolith — merged. commands:", commands)
     while True:
         try:
             s = input("you> ").strip()
@@ -788,6 +894,15 @@ def main():
             break
         if s == "/snap":
             print(json.dumps(m.snapshot(), indent=2))
+            continue
+        if options.learning and (s == "/sleep" or s.startswith("/memory ")):
+            try:
+                request = {"op": "sleep"} if s == "/sleep" else json.loads(s[8:])
+                if isinstance(request, dict):
+                    request.setdefault("user", "dylan")
+                print(json.dumps(m.learning_command(request), ensure_ascii=False))
+            except (ValueError, RuntimeError, OSError) as exc:
+                print("memory error:", exc)
             continue
         print("mono>", m.think("dylan", s))
 
