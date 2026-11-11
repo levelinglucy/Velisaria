@@ -2,13 +2,25 @@
 
 ## Development summary
 
-**Current goal (M19):** make command-line option mistakes explicit before initializing any history. The previous parser ignored unknown flags and missing `--profile` values, potentially launching an unintended session. **Target:** next unreleased `v0.1.0-alpha` source slice; existing interactive and `--origin-io` paths must still work. Intended automated environments: CPython 3.11/3.12; iPhone/Pythonista unverified.
+**Current goal (M20):** a rejected Sanctified Monolith save must not silently become a session published by a later successful turn. **Target:** next unreleased `v0.1.0-alpha` source slice; preserve committed disk history and any unresolved `.tmp` recovery evidence. Intended automated support: CPython 3.11/3.12; iPhone/Pythonista remains unverified.
 
-**Integration:** [PR #21](https://github.com/levelinglucy/Velisaria/pull/21) owns the candidate, integration and revision-specific checks; no tag/release is implied. **Test-first evidence:** initial test-only revision `86be870f` produced six CLI failures per interpreter while the existing 58 tests and the new combined-flags positive case passed ([red CI](https://github.com/levelinglucy/Velisaria/actions/runs/43011478335)). **Acceptance:** unknown/missing options print a usage error and exit 2 without opening or writing memory; `--help` exits 0 before loading; valid interactive/JSON-lines options retain their behaviour.
+**Integration:** [PR #22](https://github.com/levelinglucy/Velisaria/pull/22) is an unmerged candidate. **Validation:** test-first synthetic coverage and final hosted checks are required before promotion; exact revisions and observed results belong to the PR. **Release:** no new tag or published release.
 
-**Next:** verify the candidate and exact merged revision against the full suite before promotion, or leave a reviewable candidate if checks do not support merge. After finishing, choose another useful portfolio project rather than continuing administrative follow-ups.
+**Latest change:** `Monolith.think()` now removes only its freshly appended in-memory session if `Memory.save()` raises; the exception and disk files remain untouched by this rollback. The preceding strict CLI option fix is integrated via [PR #21](https://github.com/levelinglucy/Velisaria/pull/21).
 
-**Boundaries:** this is argument *syntax* validation, not authentication, profile-file correctness, data migration, file durability, iPhone certification or a fix for invalid JSON requests in the adapter. Existing memory protections and archived monoliths remain unchanged.
+**Next:** validate failure-injection, stale-writer and interrupted-replace cases plus existing suite; merge only on a current, sufficiently checked branch. Then select another worthwhile portfolio milestone.
+
+**Material boundaries:** only the in-memory **session list** is rolled back. Mesh and governance state may advance before the failure. No promise of full transactionality, multiwriter serialization, power-loss durability, device compatibility or owner-data recovery is made. Detailed persistence limits remain in the decisions below.
+
+## Decision M-020 · rejected save must not queue a phantom session
+
+**Observed predecessor:** `Monolith.think()` appended a new history entry using `Memory.log()` and then attempted `Memory.save()`. When save refused an outdated snapshot or raised on failed publication, the appended session remained in the same live Memory object. A later successful save could persist this earlier rejected request as though it had succeeded. This is testable with synthetic local state, not evidence of owner history loss.
+
+**Choice:** remember the session-list length before logging and remove entries appended by the current turn if the save raises an ordinary exception; re-raise the original failure. Keep the current saver, exact existing session JSON, exclusive temporary-file rules, stale-write guard, and historical monoliths unchanged. Never delete or overwrite `.tmp` as part of failure handling.
+
+**Trade-offs:** This prevents rejected turns from leaking into later saved history through the same object, but it is not a complete rollback of live mesh/governance dynamics or a filesystem transaction. A staged file from a failed rename remains evidence requiring owner review, and concurrent writers can still race between the digest check and rename. A crash cannot execute an exception handler. Alternative whole-system snapshot/restore is a larger architectural change with its own compatibility risks. Revisit only if full turn atomicity becomes a supported requirement.
+
+**Acceptance:** after a refused first save, the in-memory session list is unchanged and a later successful request saves only itself; a stale second writer retains neither a phantom session nor the ability to overwrite the primary; a failed rename leaves original bytes and staged evidence intact while discarding the uncommitted live session. Run the complete suite and syntax check per hosted CPython 3.11 and 3.12; report revision-specific evidence in [PR #22](https://github.com/levelinglucy/Velisaria/pull/22). iPhone/power-loss behaviour is not tested.
 
 ## Decision M-019 · refuse invalid CLI flags before state initialization
 
