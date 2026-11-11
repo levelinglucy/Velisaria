@@ -8,9 +8,47 @@
 
 **Current behaviour:** the optional learner retains a raw evidence journal, a derived lookup table and one processing cursor in the existing state file. Combined recall uses pending evidence immediately, and `think` displays sourced answers or unresolved conflicts. Original conversation is not silently converted into training evidence. The feature is explicitly enabled with `--learning`; see [usage and demonstration](./ASSOCIATIVE_MEMORY.md).
 
-**Next:** measure a bounded strategy-selection task where learning must improve decisions beyond normalized lookup, before adding evaluated synthetic rehearsal or mycelium routing. Keep creative hypotheses separate from observed support. Revisit scalable indexing only after history size or measured cost warrants it. Do not create post-merge commits merely to update status.
+**Review follow-up:** Claude's annotated pass identifies the exact PR #23 merge, `92f55fb`, rather than a pre-learning revision. Decisions M-021 through M-023 close concrete request/profile gaps and add file synchronization before publication. The diagnostic observations below inform future evaluation without changing the symbolic stages. Exact candidate, hosted checks and merge evidence belong to the follow-up PR, not a post-merge status commit.
+
+**Next:** measure a bounded strategy-selection task where learning must improve decisions beyond normalized lookup, before adding evaluated synthetic rehearsal or mycelium routing. Use independently measured outcomes, not the currently saturated diagnostic scores. Keep creative hypotheses separate from observed support. Revisit scalable indexing only after history size or measured cost warrants it. Do not create post-merge commits merely to update status.
 
 **Material limits:** explicit associative retention is not semantic generalization or a replication of neural HOPE. New evidence processing is batch-bounded, while state loading, integrity replay, hashing and serialization still scale with history. Source labels are unverified operator-provided provenance; user/context strings are namespaces, not authentication. iPhone/Pythonista, simultaneous writers and power-loss durability remain unverified.
+
+## Decision M-021 · validate requests before any live change
+
+**Observed predecessor:** at `92f55fb`, both JSON entry points used the default decoder, which silently chose the last duplicate key and accepted nonstandard numeric constants. This could turn an ambiguous `remember` request into sourced evidence. `think` also accepted invalid namespace labels with learning disabled, while the same call could fail inside recall with learning enabled. These are reproduced with synthetic input, not evidence that owner records were damaged.
+
+**Choice:** share the existing state duplicate-key, constant, decimal-preservation and nesting checks between `--origin-io` and interactive `/memory`. Require an object root and a string operation. Validate `think` before profile reload or live dynamics: user/context are nonblank UTF-8 strings of at most 512 characters in both modes; text is a UTF-8 string with empty/long inputs still supported. Do not coerce or normalize namespace labels. Unknown standard-JSON fields remain permitted.
+
+**Error contract:** `InvalidRequest` subclasses `ValueError`. JSON-lines replies preserve `ok: false` and a human-readable `error`, adding `error_code: "invalid_request"` for parsing or operation-argument failures. Keep candidate-state reconstruction and persistence outside argument-error conversion so state/storage problems are not mislabelled. Interactive errors retain the human `memory error:` prefix. Existing ready/bye lines remain non-JSON.
+
+**Compatibility and tests:** previously accepted malformed labels in non-learning mode, duplicate keys, nonstandard numbers, and decimals that cannot preserve their value now require caller correction. No whole-request byte cap is introduced. Disposable console/adapter tests cover both entry points, next-line recovery, and unchanged state after rejection. Direct/adapter tests check both learning modes before any profile, mesh, governance or session mutation; storage refusal remains distinct. Existing session and learner schemas are unchanged.
+
+## Decision M-022 · optional profiles must be regular files
+
+**Observed predecessor:** `os.stat` succeeded on a FIFO and `_read` then blocked opening it. A bounded synthetic subprocess reproduced the startup hang; reload regressions confirmed non-regular replacements still reached `_read`.
+
+**Choice:** check `stat.S_ISREG` immediately after `os.stat`, before reading or changing the successful signature. A non-regular path retains defaults or the last valid profile under the existing optional-profile policy. A later regular profile can load, and removing overrides through a valid empty profile still resets the core. Symlinks to regular profiles remain supported.
+
+**Limits:** this is a preflight, not an atomic descriptor-based read; a concurrent path swap can still race it. No profile byte cap or warning policy is added. One-time stderr diagnostics and stronger descriptor-based reads remain separately scoped follow-ups. Tests use temporary paths, a bounded FIFO child process, and a portable directory-replacement case.
+
+## Decision M-023 · synchronize the staged file before publication
+
+**Observed predecessor:** the saver closed `.tmp` and replaced the primary without requesting file synchronization. Python documents `flush()` followed by `os.fsync()` for buffered files; Linux documents that file synchronization alone does not persist the containing directory entry. Sources: [Python os.fsync](https://docs.python.org/3/library/os.html#os.fsync), [fsync(2)](https://www.man7.org/linux/man-pages/man2/fsync.2.html).
+
+**Choice:** precompute the serialized digest, keep exclusive temporary creation, write the complete JSON, flush Python buffers, request file fsync, close, then replace the primary and adopt the precomputed digest. Flush/fsync errors remain before publication, so the existing caller rollback is valid. Preserve the primary and every `.tmp` byte; never silently skip a real file-sync failure. This adds per-save synchronization cost and can expose storage errors previously unnoticed.
+
+**Why directory sync is separate:** both `think` and `learning_command` currently roll back live state on any save exception. A new failure after successful replacement would leave disk and live state inconsistent. If the new digest had already been adopted, a later save could even overwrite the published update with rolled-back state. Temporary synthetic fault injection reproduced this proposed failure path; current code does not perform directory sync. Before adding it, distinguish unpublished failure from `published: true` with durability unconfirmed, retain the published learner/session and digest, report that state to the adapter, and define how further writes are reconciled. Unsupported capability must be distinguished from actual I/O errors.
+
+**Acceptance and limits:** tests observe complete staged bytes at the sync call and replacement only afterwards; injected flush/fsync failures preserve original bytes, staged evidence, and the prior live session/learner. Restart refuses unresolved `.tmp`. This tests ordering and exception handling, not hardware power-cut behaviour, simultaneous writers or Pythonista. Directory-entry durability remains unverified; do not describe this as fully durable storage.
+
+## Review finding · existing diagnostics are not task rewards
+
+The maintained RTE formats the same prompt on each iteration; `prev` is unused. With default iteration/threshold settings, unflagged text returns stability 1. A contradiction can exit on its first tagged comparison with stability from 0.92 to below 1, or settle at 1 on the next comparison. Thus the displayed `iters` is 0 or 1, and describes failed comparisons rather than total comparisons.
+
+Motion vectors vary, but enumerating all 256 byte-derived component inputs through the two fixed phi-alignment passes puts every component above 1 (approximately 2.618 to 5.225), making the clamped motion score always 1. With default RTE and nonnegative empathy gains, final weight is at least 0.95 and APN alignment at least `0.5*0.92 + 0.35*0.95 = 0.7925`, above its 0.55 halt floor. Custom negative gains can make halt reachable. Alignment can exceed 1 and is not a probability. Default fresh-run temperature reaches its 0.1 floor within three ordinary calls in this pipeline.
+
+These source-derived limits and bounded synthetic probes characterize the current design; they do not measure competence or justify random score variation. EventBus and motion are currently extension hooks, and reported governor dials do not drive a sampler, search or optimizer. Future strategy learning must execute different procedures, select before observing their outcome, and compare independently evaluated success/cost against fixed strategies, a frozen policy and equally informed baselines on unseen cases. Recheck earlier tasks after later learning. Preserve the current symbolic stages while defining a real consumer and outcome for any future control changes.
 
 ## Decision · make associative memory affect later responses
 
@@ -136,7 +174,7 @@
 
 **Acceptance:** stale existing state, external edits and competing new-install writes refuse without modifying committed bytes or creating a temporary file; consecutive saves by one instance still work, including histories originally stored with CRLF. Run all prior memory/inspector tests and compile on Python 3.11/3.12. The historical monoliths, live session schema and already-saved owner files are unchanged. Full evidence is in [PR #11](https://github.com/levelinglucy/Velisaria/pull/11).
 
-**Important remaining limits:** the check and final `os.replace` are not one atomic transaction. Two truly simultaneous writers can still race after both pass the check. There is no filesystem lock, durable fsync, tamper-proofity, power-loss proof or verified iPhone/Pythonista filesystem behaviour. Recovery must still be based on preserved copies, never an assumed chronological winner. Consider a portable owner-controlled locking/append protocol only with safe stale-lock recovery and concurrency tests.
+**Important remaining limits:** the check and final `os.replace` are not one atomic transaction. Two truly simultaneous writers can still race after both pass the check. M-023 later adds file fsync before replacement; directory synchronization, a filesystem lock, tamper resistance, power-loss proof and iPhone/Pythonista filesystem verification remain absent. Recovery must still be based on preserved copies, never an assumed chronological winner. Consider a portable owner-controlled locking/append protocol only with safe stale-lock recovery and concurrency tests.
 
 ## What was verified in original source (main e311e1b)
 
@@ -160,7 +198,7 @@ The monolith's CLI writes `sanctified_state.json` in the **current working direc
 - **Decision:** treat any adjacent `.tmp` as unresolved local recovery evidence and stop startup without changing either file. Save exclusively creates `.tmp` (mode `"x"`), so a concurrently created or orphaned file cannot be silently truncated by that save. Also fail closed on a dangling primary-state symlink. Preserve the original session JSON shape and valid clean-start workflow.
 - **Evidence:** isolated exception injection and actual child-process `os._exit(37)` before replacement, for both first save and a previous committed state. Previous unsafe behaviour was demonstrated with a red test-only CI before code changes, run 42318018754 (Python 3.11/3.12). After the source/docs candidate `78e93607`, 12/12 isolated tests passed on each Python 3.11 and 3.12 in [CI 42318191650](https://github.com/levelinglucy/Velisaria/actions/runs/42318191650); this is not a power-cut/device test.
 - **Trade-offs:** ordinary use can now refuse to start if even a stale `.tmp` exists. This needs manual, owner-local investigation on **copies**; it is deliberate availability cost for data preservation.
-- **Not guaranteed:** safe concurrent independent writers, durable power-loss atomicity, file/directory fsync or Pythonista filesystem semantics. `os.replace` ensures a rename boundary on tested platforms, not a durability guarantee. The process-exit tests stop *before* replace, not during a real OS crash.
+- **Not guaranteed:** safe concurrent independent writers, durable power-loss atomicity, directory fsync or Pythonista filesystem semantics. M-023 later adds file fsync before replacement. `os.replace` ensures a rename boundary on tested platforms, not a durability guarantee. The process-exit tests stop *before* replace, not during a real OS crash.
 - **Revisit:** if trusted device tests or realistic old-format snapshots support a simpler owner recovery and an explicitly safe reconciliation procedure, with a rollback plan and no automatic deletion of the original evidence.
 
 ## Decision M-003 · inspect competing memory copies without choosing one
@@ -252,4 +290,4 @@ The result contains metadata only. `primary_sessions_prefix_of_temporary` does *
 
 ## Continuation
 
-Historical M1/M2 recovery invariants and M3 read-only inspection remain in force. Current selected work and next actions are in the [development summary](#development-summary). Preserve the original Covenant and archives. Do not promise deterministic replay: `MotionForge._seed` uses Python's process-randomized `hash(text)`.
+Historical M1/M2 recovery invariants and M3 read-only inspection remain in force. Current selected work and next actions are in the [development summary](#development-summary). Preserve the original Covenant and archives. Since M-015, `MotionForge._seed` uses a stable SHA-256-derived seed with a local RNG. This does not promise complete session replay or identical RNG behaviour across interpreter versions; timestamps and mesh IDs also vary.

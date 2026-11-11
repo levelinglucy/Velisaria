@@ -69,8 +69,17 @@ are JSON objects. Example requests, one per line:
 
 `think` returns an `output`; learning operations return a `result`. All successful
 requests include a compact `snapshot`. Failed requests return `ok: false` and an
-error. A normal thought is logged as a session; learning events are stored in a
+error. Rejected JSON or invalid operation arguments also include
+`error_code: "invalid_request"`; storage/state failures are not labelled as
+request errors. The interactive console retains its `memory error:` message.
+A normal thought is logged as a session; learning events are stored in a
 separate `associative_memory` section of the same guarded state file.
+
+Both JSON entry points reject duplicate keys at any depth, nonstandard numeric
+constants, decimal numbers that cannot survive the state's float round trip,
+and container nesting deeper than 256. A request must be a JSON object. An
+invalid line makes no request-driven changes; the following line can still run.
+For example, two `answer` keys are an error, rather than silently choosing one.
 
 | Operation | Fields and effect |
 |---|---|
@@ -88,9 +97,13 @@ authentication or access-control system.
 
 Cues match after Unicode NFKC normalization, case folding and whitespace
 normalization. Punctuation, word order and synonyms are not automatically
-equivalent. User/context/cue/source fields are nonempty strings up to 512
-characters; answers up to 2048; event IDs up to 128. Ordinary long or empty
-`think` inputs continue through the existing refiner without a cue lookup.
+equivalent. User/context/cue/source fields are nonblank UTF-8 strings up to 512
+characters; answers up to 2048; event IDs up to 128. The same user/context
+contract applies to ordinary `think` calls with learning enabled or disabled,
+including direct Python calls. Labels are never trimmed, coerced or normalized.
+`text` must be a UTF-8 string; ordinary long or empty `think` inputs continue
+through the existing refiner without a cue lookup. Previously accepted invalid
+labels in non-learning mode now require caller correction.
 
 ## Correct evidence without erasing its history
 
@@ -144,6 +157,12 @@ the existing guarded `Memory.save()`. The live learner changes only after save
 succeeds. A stale writer or interrupted replacement does not publish the candidate
 learner in memory. An interrupted `.tmp` is preserved for the existing recovery
 procedure; it is never automatically deleted or promoted.
+
+The saver flushes and requests file synchronization of the exclusive temporary
+file before replacement. If either step fails, the primary stays unchanged,
+the candidate remains unpublished, and `.tmp` is retained. Directory syncing
+after replacement needs separate publication-aware failure handling and is not
+included; this change does not establish complete power-loss durability.
 
 Existing sessions and unrelated state fields are preserved. Original learning
 events are never silently pruned. On activation, malformed learning state,
