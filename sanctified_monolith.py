@@ -739,8 +739,17 @@ class Monolith:
                 f"temp:{ctx['govern']['super']['temperature']:.2f} align:{ctx['govern']['apn']['alignment']:.3f}" \
                 + (" [HALT]" if ctx['govern']['apn']['halt'] else "")
 
+        # A refused save must not leave an uncommitted turn queued to be
+        # published by an unrelated later successful request.
+        prior_count = len(self.mem.state["sessions"])
         self.mem.log(user, text, final, ctx)
-        self.mem.save()
+        try:
+            self.mem.save()
+        except Exception:
+            # Preserve the save failure (including any on-disk .tmp evidence).
+            # Only discard the turn appended by this call in live memory.
+            del self.mem.state["sessions"][prior_count:]
+            raise
         ctx["final"] = {"text": final}
         return final
 
