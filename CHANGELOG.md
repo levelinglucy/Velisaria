@@ -1,5 +1,12 @@
 # Velisaria · change history
 
+## Unreleased · one-file larger monolith and inline developer guide
+
+- Include the learner and snapshot/runtime definitions directly in `velisara_monolith_final_fixed_empathy.py`, making that one script sufficient to copy and run the larger headless program.
+- Retain `velisara_runtime.py` as a compatibility reexport facade and Sanctified's separate `associative_memory.py`, with a regression checking learner-definition parity.
+- Add a source reading map and developer explanations throughout the main file, including data flow, real effects, retained limitations, and explicitly unimplemented upgrade ideas with acceptance checks.
+- Add isolated copied-file execution/restart coverage and update usage documentation, including the retained 50/100/20 extension-history caps. Current validation and release status belong to the [developer decision](DEV_NOTES.md#single-file-consolidation-and-inline-developer-guide--12-november-2026).
+
 ## Unreleased · repair the larger empathy monolith
 
 - Restore the larger file's misplaced symbolic methods, overwritten startup, voice and richer organ variants while retaining the recursive design and original repository history.
