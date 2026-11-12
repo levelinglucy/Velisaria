@@ -1,4 +1,12 @@
-# Sanctified Monolith · change history
+# Velisaria · change history
+
+## Unreleased · repair the larger empathy monolith
+
+- Restore the larger file's misplaced symbolic methods, overwritten startup, voice and richer organ variants while retaining the recursive design and original repository history.
+- Add a quiet headless lifecycle, per-instance RNG, complete validated snapshots, failed-turn rollback, explicit JSON-lines requests and bounded feedback runs.
+- Reuse Sanctified's sourced associative learner; preserve observation provenance, corrections, conflicts and the distinction between generated dreams and factual support.
+- Repair empathy ordering, numeric/symbolic mood separation, mythos recounting, recursive pattern reentry, archive retention and fresh memory search.
+- Add synthetic large-core/persistence/preservation regressions and a disposable demonstration to the existing Python 3.11/3.12 workflow. See [LARGE_MONOLITH.md](LARGE_MONOLITH.md) and the [developer decision](DEV_NOTES.md#larger-monolith-repair--12-november-2026) for behavior and limits. No stable/device release claimed.
 
 ## Unreleased · review follow-up for requests, profiles and file synchronization
 

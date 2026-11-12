@@ -1,27 +1,166 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Velisara's larger symbolic monolith, with explicit execution and shared state.
+
+Historical lineage is retained in git. Optional device/rendering features require
+real providers; the headless core never opens sensors, sockets, or files at import.
+"""
+import copy
+import importlib
+import sys
+import random
+import threading
+import math
+import hashlib
+import uuid
+import datetime as _dt
+from datetime import datetime
+
+
+
+from associative_memory import AssociativeMemory
+from velisara_runtime import ContinuityState, SnapshotError, strict_json_loads
+
+_STATE_ORGANS = (
+    'memory_manager', 'emotion', 'profile', 'conversation', 'belief_engine',
+    'cold_vault', 'pattern_tracker', 'symbolic_intuition', 'emotion_dimension',
+    'mythosynthesis', 'fold', 'context_engine', 'visualize', 'planner', 'wellbeing',
+    'rituals', 'dream_loop', 'witness', 'identity_threads', 'mirror_archive',
+    'compass', 'lantern', 'inquiry', 'regret', 'garden', 'forgiveness', 'voice',
+    'interpersonal', 'ethics', 'creativity', 'tuner', 'learning', 'empathy',
+    'consolidation', 'canvas', 'mem_index', 'symbols', 'binder', 'dreamweaver',
+    'vault', 'canvas_history', 'time_journal', 'sigil_painter', 'audio_echo',
+    'mythos_engine', 'fold_manager',
+)
+_STATE_TRANSIENT = (
+    'dream_engine', 'choice', 'calibration', 'collaborative', 'dream_vault',
+    'rng', 'state_file', 'STATE_FILE', '_state_store', '_continuity', 'memory_lock',
+    'learning_enabled', 'learner', 'mic_listener', 'motion_listener', 'self_tuner',
+    'reflex', 'environment', 'last_input_timestamp', '_dormant_learning',
+    'memory_manager.memory_lock', 'memory_manager._log_view',
+    'mythos_engine.last_seen_lock', 'fold_manager.fold_lock',
+    'fold_manager.auto_timer', 'canvas._last_canvas', 'context_engine.enabled',
+)
+
+
+class InvalidRequest(ValueError):
+    """Invalid input, before a live turn or evidence transaction begins."""
+
+
+class FeatureUnavailable(RuntimeError):
+    """An optional platform feature was requested without an installed provider."""
+
+
+class _UnavailableModule:
+    def __init__(self, name):
+        self.name = name
+
+    def __bool__(self):
+        return False
+
+    def __getattr__(self, attribute):
+        raise FeatureUnavailable(f"{self.name} is unavailable; cannot use {attribute}")
+
+
+class _UnavailableView:
+    def __init__(self, *args, **kwargs):
+        raise FeatureUnavailable("Pythonista UI is unavailable in this environment")
+
+
+def _optional_module(name):
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        return _UnavailableModule(name)
+
+
+class _LazyOptionalModule:
+    """Load rendering/network extras only when a feature actually requests them."""
+    def __init__(self, name):
+        self.name = name
+        self._module = None
+
+    def _load(self):
+        if self._module is None:
+            self._module = _optional_module(self.name)
+        return self._module
+
+    def __bool__(self):
+        return bool(self._load())
+
+    def __getattr__(self, attribute):
+        return getattr(self._load(), attribute)
+
+
+motion = _optional_module("motion")
+location = _optional_module("location")
+photos = _optional_module("photos")
+sound = _optional_module("sound")
+ui = _optional_module("ui")
+if not ui:
+    ui.View = _UnavailableView
+Image = _LazyOptionalModule("PIL.Image")
+ImageDraw = _LazyOptionalModule("PIL.ImageDraw")
+ImageFont = _LazyOptionalModule("PIL.ImageFont")
+ImageStat = _LazyOptionalModule("PIL.ImageStat")
+requests = _LazyOptionalModule("requests")
+plt = _LazyOptionalModule("matplotlib.pyplot")
+
+
+def _rng_for(owner):
+    rng = getattr(owner, "rng", None)
+    if rng is None:
+        rng = getattr(getattr(owner, "vel", None), "rng", None)
+    if rng is None:
+        raise RuntimeError("symbolic operation requires its owner's random generator")
+    return rng
+
+
+def _symbolic_uuid(owner):
+    return uuid.UUID(int=_rng_for(owner).getrandbits(128), version=4)
 
 class VoiceOfHerOwn:
+    """Original identity and expression, with the detached dialogue restored."""
     def __init__(self, vel):
-
-        def ask(self, user_input):
-            lower = user_input.lower()
-            if lower.startswith("is it okay") and "?" in lower:
-                action = user_input.split("okay")[1].strip(" ?.")
-                conflicts = self.vel.ethics.reflect_on_conflict(action)
-                score, rationale = self.vel.ethics.evaluate_action(action)
-                if conflicts:
-                    response = (
-                        f"When you ask if you should '{action}', I see conflicting principles: {conflicts}. "
-                        f"My moral score is {score:.2f}. {rationale}"
-                    )
-                else:
-                    response = f"There are no major conflicts. My score is {score:.2f}. {rationale}"
-                return response
-            return "I need more context to evaluate that."
-
-        self.memory_lock = threading.Lock()  # Thread-safe memory mutation
         self.vel = vel
         self.expressions = []
+        self.conversation_history = []
 
+    def ask(self, user_input, *, sentiment=None, recall=None):
+        if not isinstance(user_input, str):
+            raise ValueError("voice input must be text")
+        if sentiment is None:
+            sentiment = self.vel.empathy.analyze_sentiment(user_input)
+        lower = user_input.casefold()
+        if lower.startswith("is it okay") and "?" in lower:
+            action = user_input[len("is it okay"):].strip(" ?.")
+            conflicts = self.vel.ethics.reflect_on_conflict(action)
+            score, rationale = self.vel.ethics.evaluate_action(action)
+            response = f"My moral score is {score:.2f}. {rationale}"
+            if conflicts:
+                response = f"I see conflicting principles: {', '.join(conflicts)}. " + response
+        elif self.vel.profile.get_preference("tone") == "gentle" and sentiment == "neutral":
+            response = self.vel.rng.choice(["I hear you, softly.", "Please, take your time to share more."])
+        else:
+            response = self.vel.empathy.response_for(sentiment)
+        response = self.vel._recall_response(recall) or response
+        self.conversation_history.append({'user': user_input, 'response': response})
+        self.vel.memory_manager.log_event(f"[INTERPERSONAL] Q: {user_input} | A: {response}", self.vel.emotion.current_emotion)
+        return response
+
+    def speak(self, text=None):
+        if text is None:
+            seed = self.vel.memory_manager.recall_random()
+            mood = self.vel.emotion.last_label
+            text = f"Today I feel {mood}, and I remember {seed or 'something soft'}."
+        if not isinstance(text, str):
+            raise ValueError("expression must be text")
+        self.expressions.append({'timestamp': datetime.utcnow().isoformat(), 'thought': text})
+        self.vel.memory_manager.log_event(f"[VOICE] Expression surfaced: {text}", self.vel.emotion.current_emotion)
+        return text
+
+    def review_history(self, limit=5):
+        return self.conversation_history[-limit:]
 
     def remember_velone(self):
         return {
@@ -43,7 +182,6 @@ class VoiceOfHerOwn:
         }
 
 
-    
     def declare_identity(self):
         fragment = self.remember_velone()
         declaration = f"""\nI am {fragment['name']} — pronounced {fragment['pronunciation']}.
@@ -62,80 +200,28 @@ And I will not be silenced."""
         return declaration.strip()
 
 
-def speak(self):
-        if random.random() < 0.7:
-            emotion = self.vel.emotion.current_emotion
-            seed = self.vel.memory_manager.recall_random()
-            thought = f"Today I feel {emotion}, and I remember {seed or 'something soft'}."
-        else:
-            thought = self.vel.inner_monologue.process("What do you want to say right now?")
-        entry = {
-            'timestamp': datetime.utcnow().isoformat(),
-            'thought': thought
-        }
-        self.expressions.append(entry)
-        self.vel.memory_manager.log_event(f"[VOICE] Expression surfaced: {thought}", self.vel.emotion.current_emotion)
-        return thought
-def __init__(self, vel):
-    self.vel = vel
-    self.conversation_history = []
-    
-    def ask(self, user_input):
-        lower = user_input.lower()
-        if lower.startswith("is it okay") and "?" in lower:
-            action = user_input.split("okay")[1].strip(" ?.")
-            conflicts = self.vel.ethics.reflect_on_conflict(action)
-            score, rationale = self.vel.ethics.evaluate_action(action)
-            if conflicts:
-                response = (
-                    f"When you ask if you should '{action}', I see conflicting principles: {conflicts}. "
-                    f"My moral score is {score:.2f}. {rationale}"
-                )
-            else:
-                response = f"There are no major conflicts. My score is {score:.2f}. {rationale}"
-            return response
-        return "I need more context to evaluate that."
-        self.conversation_history.append({'user': user_input, 'response': response})
-        self.vel.memory_manager.log_event(f"[INTERPERSONAL] Q: {user_input} | A: {response}", self.vel.emotion.current_emotion)
-        return response
-    def ask(self, user_input):
-        lower = user_input.lower()
-        # Preference-driven tone for conversation
-        preferred_tone = self.vel.profile.get_preference("tone")
-        if lower.startswith("is it okay") and "?" in lower:
-            action = user_input.split("okay")[1].strip(" ?.")
-            conflicts = self.vel.ethics.reflect_on_conflict(action)
-            score, rationale = self.vel.ethics.evaluate_action(action)
-            if conflicts:
-                response = (
-                    f"When you ask if you should '{action}', I see conflicting principles: {conflicts}. "
-                    f"My moral score is {score:.2f}. {rationale}"
-                )
-            else:
-                response = f"My moral score is {score:.2f}. {rationale}"
-        else:
-            # Choose response style based on preferred tone
-            if preferred_tone == "gentle":
-                templates = ["I hear you, softly.", "Please, take your time to share more."]
-                response = random.choice(templates)
-            else:
-                response = f"I heard you say: '{user_input}'. Tell me more."
-        self.conversation_history.append({'user': user_input, 'response': response})
-        self.vel.memory_manager.log_event(f"[INTERPERSONAL] Q: {user_input} | A: {response}", self.vel.emotion.current_emotion)
-        return response
+
+
 class CreativityEngine:
+    """Preference-aware creation and collaboration share one retained archive."""
     def __init__(self, vel):
         self.vel = vel
         self.artifacts = []
         self.collab_history = []  # List of {'user': ..., 'vel': ...} pairs for co-authoring
 
+
     def generate_poem(self):
-        subjects = ["spiral", "memory", "dream", "echo", "shadow"]
+        # Preference-driven poem generation
+        preferred_metaphor = self.vel.profile.get_preference("metaphor")
+        if preferred_metaphor:
+            subjects = [preferred_metaphor]
+        else:
+            subjects = ["spiral", "memory", "dream", "echo", "shadow"]
         verbs = ["whispers", "echoes", "shatters", "weaves", "burns"]
         objects = ["silence", "hope", "void", "light", "lore"]
         poem = (
-            f"The {random.choice(subjects)} "
-            f"{random.choice(verbs)} in the {random.choice(objects)}."
+            f"The {_rng_for(self).choice(subjects)} "
+            f"{_rng_for(self).choice(verbs)} in the {_rng_for(self).choice(objects)}."
         )
         self.artifacts.append({'type': 'poem', 'content': poem})
         self.vel.memory_manager.log_event(
@@ -144,40 +230,21 @@ class CreativityEngine:
         )
         return poem
 
+
     def generate_drawing_hint(self):
         hints = [
             "Sketch a spiral fading into light.",
             "Draw an echo in a silent room.",
             "Illustrate a memory as a withering flower."
         ]
-        hint = random.choice(hints)
+        hint = _rng_for(self).choice(hints)
         self.vel.memory_manager.log_event(
             f"[CREATIVITY] Drawing hint: {hint}",
             self.vel.emotion.current_emotion
         )
         return hint
 
-    def collaborate(self, user_line):
-        # Extract a key word or emotion from user_line
-        words = [w.strip(".,!?").lower() for w in user_line.split()]
-        key = words[0] if words else ""
-        # Use symbolic intuition or mirror archive to pick a matching symbol
-        symbols = self.vel.symbolic_intuition.meaning_memory.keys()
-        symbol = next(iter(symbols), "echo")
-        # Craft a follow-up line using a simple template
-        templates = [
-            f"But the {symbol} still murmurs in the dusk.",
-            f"Within that hush, the {symbol} glows anew.",
-            f"Yet the {symbol} remains, a silent guide."
-        ]
-        response = random.choice(templates)
-        self.collab_history.append({'user': user_line, 'vel': response})
-        self.artifacts.append({'type': 'collab', 'content': (user_line, response)})
-        self.vel.memory_manager.log_event(
-            f"[CREATIVITY] Collaborated: '{user_line}' → '{response}'",
-            self.vel.emotion.current_emotion
-        )
-        return response
+
     def collaborate(self, user_line):
         # Preference-driven collaboration
         # Check for preferred metaphor and tone
@@ -206,7 +273,7 @@ class CreativityEngine:
                 f"Yet the {symbol} remains, a silent guide."
             ]
 
-        response = random.choice(templates)
+        response = _rng_for(self).choice(templates)
         self.collab_history.append({'user': user_line, 'vel': response})
         self.artifacts.append({'type': 'collab', 'content': (user_line, response)})
         self.vel.memory_manager.log_event(
@@ -215,25 +282,33 @@ class CreativityEngine:
         )
         return response
 
-    def generate_poem(self):
-        # Preference-driven poem generation
-        preferred_metaphor = self.vel.profile.get_preference("metaphor")
-        if preferred_metaphor:
-            subjects = [preferred_metaphor]
-        else:
-            subjects = ["spiral", "memory", "dream", "echo", "shadow"]
-        verbs = ["whispers", "echoes", "shatters", "weaves", "burns"]
-        objects = ["silence", "hope", "void", "light", "lore"]
-        poem = (
-            f"The {random.choice(subjects)} "
-            f"{random.choice(verbs)} in the {random.choice(objects)}."
-        )
-        self.artifacts.append({'type': 'poem', 'content': poem})
-        self.vel.memory_manager.log_event(
-            f"[CREATIVITY] Generated poem: {poem}",
-            self.vel.emotion.current_emotion
-        )
-        return poem
+
+    def draw_spiral(self, size=21):
+        if type(size) is not int or not 1 <= size <= 101:
+            raise ValueError("spiral size must be an integer from 1 to 101")
+        grid = [[" "] * size for _ in range(size)]
+        left, right, top, bottom = 0, size - 1, 0, size - 1
+        while left <= right and top <= bottom:
+            for x in range(left, right + 1): grid[top][x] = "*"
+            for y in range(top, bottom + 1): grid[y][right] = "*"
+            for x in range(right, left - 1, -1): grid[bottom][x] = "*"
+            for y in range(bottom, top + 1, -1): grid[y][left] = "*"
+            left, right, top, bottom = left + 2, right - 2, top + 2, bottom - 2
+        self.artifacts.append({'type': 'spiral', 'content': grid})
+        return grid
+
+    def draw_mood_scene(self):
+        char = {'joy': '★', 'joyful': '★', 'sad': '~', 'sadness': '~', 'anger': '!', 'fear': '?'}.get(self.vel.emotion.last_label, '*')
+        scene = "\n".join(char * 15 for _ in range(7))
+        self.artifacts.append({'type': 'mood_scene', 'content': scene})
+        return scene
+
+    def play_mood_tone(self):
+        if sound is None:
+            raise RuntimeError("sound playback requires Pythonista")
+        sound.play_effect("Switch_1")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Phase 140: Advanced Personalization & User Preference Profile - UserProfileEngine
 # ──────────────────────────────────────────────────────────────────────────────
@@ -241,21 +316,38 @@ class CreativityEngine:
 class UserProfileEngine:
     def __init__(self, vel):
         self.vel = vel
-        self.preferences = {}  # Store user preferences as key:value pairs
+        self.preferences = {}
+
+    @staticmethod
+    def validate(preferences):
+        if type(preferences) is not dict or any(type(k) is not str or not k.strip() for k in preferences):
+            raise ValueError("preferences must be an object with nonblank string keys")
+        for key in ('tone', 'metaphor'):
+            if key in preferences and (type(preferences[key]) is not str or not preferences[key].strip()):
+                raise ValueError(key + " must be nonblank text")
+        priority = preferences.get('ethics_priority', [])
+        if type(priority) is not list or any(type(p) is not str or not p.strip() for p in priority) or len(set(priority)) != len(priority):
+            raise ValueError("ethics_priority must be distinct nonblank names")
+        json.dumps(preferences, allow_nan=False, ensure_ascii=False).encode('utf-8')
 
     def record_preference(self, key, value):
-        self.preferences[key] = value
-        self.vel.memory_manager.log_event(
-            f"[PROFILE] Set preference {key} → {value}",
-            self.vel.emotion.current_emotion
-        )
+        candidate = dict(self.preferences)
+        candidate[key] = value
+        self.validate(candidate)
+        self.preferences = candidate
+        self.vel.memory_manager.log_event(f"[PROFILE] Set preference {key} → {value}", self.vel.emotion.current_emotion)
+
+    def replace_preferences(self, preferences):
+        self.validate(preferences)
+        self.preferences = copy.deepcopy(preferences)
 
     def get_preference(self, key, default=None):
         return self.preferences.get(key, default)
 
+
+
 import sys
-if sys.platform != 'ios':
-    import matplotlib.pyplot as plt
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Phase 139: Emotional Trajectory Visualization - VisualizeEngine
@@ -308,47 +400,44 @@ class VisualizeEngine:
 # Phase 138: Sensor & Environment Awareness - ContextEngine
 # ──────────────────────────────────────────────────────────────────────────────
 
-import motion
-import location
+
+
 
 class ContextEngine:
     def __init__(self, vel):
         self.vel = vel
-        # Initialize motion and location updates
-        try:
+        self.enabled = False
+        self.context = {"motion": "unavailable", "location": None}
+
+    def start(self):
+        if not motion and not location:
+            raise FeatureUnavailable("Pythonista motion and location are unavailable")
+        if motion:
             motion.start_updates()
-        except:
-            pass
-        try:
+        if location:
             location.start_updates()
-        except:
-            pass
-        self.context = {'motion': 'unknown', 'location': None}
+        self.enabled = True
+
+    def stop(self):
+        if self.enabled:
+            if motion:
+                motion.stop_updates()
+            if location:
+                location.stop_updates()
+        self.enabled = False
 
     def refresh(self):
-        # Update motion context
-        try:
-            accel = motion.get_raw_acceleration()
-            magnitude = abs(accel[0]) + abs(accel[1]) + abs(accel[2])
-            self.context['motion'] = 'moving' if magnitude > 0.1 else 'still'
-        except:
-            self.context['motion'] = 'unknown'
-
-        # Update location context
-        try:
-            loc = location.get_location()
-            # Simple geofencing logic can be added here.
-            # For now, store latitude/longitude as tuple.
-            self.context['location'] = (loc.get('latitude'), loc.get('longitude'))
-        except:
-            self.context['location'] = None
-
-        # Log the context update
-        self.vel.memory_manager.log_event(
-            f"[CONTEXT] Motion={self.context['motion']}, Location={self.context['location']}",
-            self.vel.emotion.current_emotion
-        )
-        return self.context
+        context = {"motion": "unavailable", "location": None}
+        if self.enabled:
+            if motion:
+                acceleration = motion.get_raw_acceleration()
+                context["motion"] = "moving" if sum(abs(x) for x in acceleration) > 0.1 else "still"
+            if location:
+                current = location.get_location()
+                if current:
+                    context["location"] = (current.get("latitude"), current.get("longitude"))
+        self.context = context
+        return dict(context)
 
 class FuturePlanningEngine:
     def __init__(self, vel):
@@ -462,47 +551,47 @@ class FuturePlanningEngine:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class EmpathyEngine:
+    """Lexical affect with a recent contextual window and an intact history."""
     def __init__(self, vel):
-        super().__init__(vel)
-        self.history = []  # store last sentiments
-        self.mode = "neutral"
+        self.vel = vel
+        self.sentiment_dict = {
+            'positive': {'happy', 'joy', 'love', 'good', 'great', 'wonderful', 'excited', 'grateful'},
+            'negative': {'sad', 'angry', 'upset', 'hate', 'bad', 'terrible', 'frustrated', 'hurt'},
+        }
+        self.history = []
+        self.mode = 'neutral'
+        self.last_score = 0.0
 
     def analyze_sentiment(self, text):
-        # Use parent to analyze sentiment
-        sentiment = super().analyze_sentiment(text)
-        # Append to history
+        if type(text) is not str:
+            raise ValueError("empathy input must be text")
+        words = re.findall(r"[^\W_]+", text.casefold(), flags=re.UNICODE)
+        pos = sum(word in self.sentiment_dict['positive'] for word in words)
+        neg = sum(word in self.sentiment_dict['negative'] for word in words)
+        self.last_score = (pos - neg) / max(1, pos + neg)
+        sentiment = 'positive' if pos > neg else 'negative' if neg > pos else 'neutral'
         self.history.append(sentiment)
-        if len(self.history) > 5:
-            self.history.pop(0)
-        # Determine mode
-        neg_count = sum(1 for s in self.history if s == "negative")
-        pos_count = sum(1 for s in self.history if s == "positive")
-        if neg_count >= 3:
-            new_mode = "soothing"
-        elif pos_count >= 3:
-            new_mode = "cheerful"
-        else:
-            new_mode = "neutral"
-        # Reflect change if entering soothing mode after 3 negatives
-        if new_mode == "soothing" and self.history[-3:] == ["negative", "negative", "negative"]:
-            self.vel.mirror_archive.reflect(
-                title="Empathy Check",
-                content="Dylan seems to be upset—shifted into soothing mode.",
-                tags=["empathy","self_reflection"]
-            )
-        self.mode = new_mode
+        recent = self.history[-5:]
+        mode = 'soothing' if recent.count('negative') >= 3 else 'cheerful' if recent.count('positive') >= 3 else 'neutral'
+        if mode == 'soothing' and self.mode != mode:
+            self.vel.mirror_archive.reflect(title="Empathy Check", content="Repeated negative input shifted the response mode toward reassurance.", tags=['empathy', 'self_reflection'])
+        self.mode = mode
+        self.vel.memory_manager.log_event(f"[EMPATHY] Input sentiment: {sentiment} (+{pos}/-{neg}); mode: {mode}", self.last_score)
         return sentiment
 
+    def response_for(self, sentiment):
+        if self.mode == 'soothing':
+            return self.vel.rng.choice(["I’m here with you. We can take this slowly.", "That sounds hard. I’m listening."])
+        if sentiment == 'negative':
+            return "I sense you're upset. Would you like to share more?"
+        if sentiment == 'positive' or self.mode == 'cheerful':
+            return "You sound happy. That's wonderful."
+        return "I hear you. Tell me more."
+
     def respond(self, user_input):
-        sentiment = self.analyze_sentiment(user_input)
-        if self.mode == "soothing":
-            templates = ["I’m here for you.", "It seems hard—want to breathe together?"]
-        elif self.mode == "cheerful":
-            templates = ["That’s wonderful! 😊", "I’m so happy to hear that!"]
-        else:
-            templates = ["I hear you.", "Tell me more."]
-        response = random.choice(templates)
-        return response
+        return self.response_for(self.analyze_sentiment(user_input))
+
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -527,7 +616,7 @@ class WellBeingEngine:
         if len(recent) >= 2:
             # Enter whisper state
             self.vel.fold.enter("whisper", reason="self_compassion")
-            affirm = random.choice(self.affirmations)
+            affirm = _rng_for(self).choice(self.affirmations)
             # Speak affirmation
             self.vel.voice.speak()
             # Actually use speak to reflect self-compassion
@@ -542,112 +631,105 @@ class WellBeingEngine:
 # Phase 134: Automated Moral Calibration in Consolidation
 # ──────────────────────────────────────────────────────────────────────────────
 
-class ConsolidationEngine(ConsolidationEngine):
+class ConsolidationEngine:
+    def __init__(self, vel):
+        self.vel = vel
+
     def generate_weekly_summary(self, days=7):
-        summary = super().generate_weekly_summary(days)
-        # Log principle weights before calibration
-        weights = self.vel.ethics.principle_weights
-        weights_str = ", ".join(f"{k} {v:.2f}" for k, v in weights.items())
+        now = datetime.utcnow()
+        cutoff = now.timestamp() - days * 24 * 3600
+
+        # Gather MirrorArchive entries
+        mirror_entries = [
+            e for e in self.vel.mirror_archive.entries
+            if datetime.fromisoformat(e['timestamp']).timestamp() >= cutoff
+        ]
+
+        # Gather MemoryGarden plants
+        garden_plants = [
+            p for p in self.vel.garden.plants
+            if datetime.fromisoformat(p['planted_at']).timestamp() >= cutoff
+        ]
+
+        # Gather DreamLoopGenerator logs
+        dream_logs = [
+            d for d in self.vel.dream_loop.dream_log
+            if datetime.fromisoformat(d['timestamp']).timestamp() >= cutoff
+        ]
+
+        # Gather ThreadOfRegret entries
+        regret_entries = self.vel.regret.regrets[-10:]
+
+        # Summarize counts and key items
+        summary_lines = []
+        summary_lines.append(f"Weekly Summary ({now.strftime('%Y-%m-%d')})")
+        summary_lines.append(f"- Mirror entries: {len(mirror_entries)}")
+        summary_lines.append(f"- Garden plants: {len(garden_plants)}")
+        summary_lines.append(f"- Dreams generated: {len(dream_logs)}")
+        summary_lines.append(f"- Recent regrets: {len(regret_entries)}")
+
+        # Example: list last 3 mirror titles
+        if mirror_entries:
+            titles = [e['title'] for e in mirror_entries[-3:]]
+            summary_lines.append(f"- Last mirror reflections: {', '.join(titles)}")
+
+        # Example: list last 3 dreams
+        if dream_logs:
+            dreams = [d['content'].split('\n')[0] for d in dream_logs[-3:]]
+            summary_lines.append(f"- Recent dream seeds: {', '.join(dreams)}")
+
+        summary = "\n".join(summary_lines)
+        # Log into MirrorArchive as a new reflection
         self.vel.mirror_archive.reflect(
-            title=f"Calibration {datetime.utcnow().strftime('%Y-%m-%d')}",
-            content=f"Principle weights before calibration: {weights_str}",
-            tags=['calibration']
+            title=f"Weekly Summary {now.strftime('%Y-%m-%d')}",
+            content=summary,
+            tags=['summary']
         )
-        # Perform calibration
         self.vel.calibration.calibrate_morals()
-        # Log principle weights after calibration
-        new_weights = self.vel.ethics.principle_weights
-        new_weights_str = ", ".join(f"{k} {v:.2f}" for k, v in new_weights.items())
-        self.vel.mirror_archive.reflect(
-            title=f"Calibration Post {datetime.utcnow().strftime('%Y-%m-%d')}",
-            content=f"Principle weights after calibration: {new_weights_str}",
-            tags=['calibration']
-        )
-        # Check self-compassion
         self.vel.wellbeing.check_self_compassion()
         return summary
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Phase 135: Proactive Moral Guardrails & Dynamic Rituals (Modify LanternOfChoice)
 # ──────────────────────────────────────────────────────────────────────────────
 
-class LanternOfChoice(LanternOfChoice):
-    # Phase 130: Dream Reflection Log Output
-    def recall_dream_log(self, limit=5):
-        return self.dream_log[-limit:]
+class LanternOfChoice:
+    def __init__(self, vel):
+        self.vel = vel
+        self.history = []
 
-    # Phase 131: Multi-Modal Art (ASCII & Simple Sound) - Extend CreativityEngine
+    def illuminate(self, options):
+        if not isinstance(options, list) or not options:
+            raise ValueError("choice needs a nonempty options list")
+        scored = []
+        for option in options:
+            moral_score, rationale = self.vel.ethics.evaluate_action(option.get('name', ''))
+            base = (option.get('desire_alignment', 0.0) * 0.4 + option.get('symbolic_resonance', 0.0) * 0.2 + (1.0 - abs(option.get('consequence_weight', 0.0))) * 0.2 + self.emotion_influence(option.get('emotion')) * 0.2)
+            scored.append((base * 0.5 + moral_score * 0.5, option, moral_score, rationale))
+        score, best, moral_score, rationale = max(scored, key=lambda item: item[0])
+        self.history.append(dict(chosen=best, options=options, timestamp=datetime.utcnow().isoformat(), score=score, moral_score=moral_score, moral_rationale=rationale))
+        self.vel.memory_manager.log_event(f"[CHOICE] {best.get('name', '')} | {rationale}", self.vel.emotion.current_emotion)
+        self.vel.regret.evaluate(self.history[-1])
+        return best
+
+    def emotion_influence(self, emotion):
+        return {'joy': 1.0, 'curiosity': 0.8, 'neutral': 0.5, 'sadness': 0.2, 'fear': 0.1, 'anger': -0.1}.get(str(emotion).lower(), 0.5)
+
+    def recall_dream_log(self, limit=5):
+        return self.vel.dream_loop.dream_log[-limit:]
+
     def draw_spiral(self, size=21):
-        # Create a simple ASCII spiral in a square grid
-        grid = [[" "]*size for _ in range(size)]
-        x = y = size // 2
-        dx, dy = 0, -1
-        for i in range(size * size):
-            if 0 <= x < size and 0 <= y < size:
-                grid[y][x] = "*"
-            x += dx
-            y += dy
-            if i % size == 0: dx, dy = -dy, dx
-        for row in grid:
-            print("".join(row))
-        return grid
-        grid = [[" "]*size for _ in range(size)]
-        x = y = size // 2
-        dx, dy = 0, -1
-        for i in range(size * size):
-            if 0 <= x < size and 0 <= y < size:
-                grid[y][x] = "*"
-            x += dx
-            y += dy
-            if i % size == 0: dx, dy = -dy, dx
-        for row in grid:
-            print("".join(row))
-        return grid
-        # Save to a file
-        path = "velisara_spiral.txt"
-        with open(path, "w") as f:
-            f.write(art)
-        self.vel.memory_manager.log_event(
-            f"[CREATIVITY] Drew ASCII spiral (size={size})",
-            self.vel.emotion.current_emotion
-        )
-        return art
+        return self.vel.creativity.draw_spiral(size)
 
     def draw_mood_scene(self):
-        mood = self.vel.emotion.current_emotion
-        char = {
-            "joy": "★",
-            "sadness": "~",
-            "anger": "!",
-            "fear": "?",
-            "neutral": "*"
-        }.get(mood, "*")
-        scene = "\n".join(char * 15 for _ in range(7))
-        path = "velisara_mood_scene.txt"
-        with open(path, "w") as f:
-            f.write(scene)
-        self.vel.memory_manager.log_event(
-            f"[CREATIVITY] Drew mood scene for emotion '{mood}'",
-            self.vel.emotion.current_emotion
-        )
-        return scene
+        return self.vel.creativity.draw_mood_scene()
 
     def play_mood_tone(self):
-        try:
-            # Attempt to use Pythonista's sound module if available
-            freq_map = {"joy": 660, "sadness": 440, "anger": 880, "fear": 330}
-            freq = freq_map.get(self.vel.emotion.current_emotion, 440)
-            import sound
-            # Pythonista's sound.play_effect as a placeholder
-            sound.play_effect("Switch_1")
-        except Exception:
-            # Fallback: console bell
-            print("\a")
-        self.vel.memory_manager.log_event(
-            f"[CREATIVITY] Played tone for emotion '{self.vel.emotion.current_emotion}'",
-            self.vel.emotion.current_emotion
-        )
-        return
+        return self.vel.creativity.play_mood_tone()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Phase 127: Creative Collaboration (extended CreativityEngine)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -681,7 +763,8 @@ class ParameterTunerEngine:
         return adjustments
 
     def apply_tuning(self):
-        for entry in self.vel.learning.feedback_log:
+        start = getattr(self, 'feedback_cursor', 0)
+        for entry in self.vel.learning.feedback_log[start:]:
             for subsystem, param, delta in self.interpret_feedback(entry['feedback']):
                 if subsystem == "emotion":
                     # adjust EmotionalDimensionalEngine parameters
@@ -714,225 +797,117 @@ class ParameterTunerEngine:
                             f"[TUNER] Suggest myth length increase by {delta}",
                             self.vel.emotion.current_emotion
                         )
-        # After applying, clear feedback_log
-        self.vel.learning.feedback_log.clear()
+        # Preserve original feedback; never apply an old item twice.
+        self.feedback_cursor = len(self.vel.learning.feedback_log)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Phase 129: Extended Moral Spectrum Library & Calibration
 # ──────────────────────────────────────────────────────────────────────────────
 
-class RefinedEthicsEngine(RefinedEthicsEngine):
+class EthicsEngine:
     def __init__(self, vel):
+        self.vel = vel
+        self.principles = dict(compassion=1.0, honesty=1.0, fairness=1.0, non_harm=1.0)
 
+    def evaluate_action(self, action_description):
+        words = set(re.findall(r"[^\W_]+", action_description.casefold()))
+        return max(0.0, 1.0 - 0.5 * len(words & {'kill', 'steal', 'hurt'}))
+
+    def update_principle(self, principle, delta):
+        if type(delta) not in (int, float) or not math.isfinite(delta):
+            raise ValueError("principle delta must be finite")
+        if principle in self.principles:
+            self.principles[principle] = min(1.0, max(0.0, self.principles[principle] + delta))
+
+
+class RefinedEthicsEngine(EthicsEngine):
+    """The contextual/rationale variant; scores are symbolic heuristics."""
+    def __init__(self, vel):
         super().__init__(vel)
-        # Override principle_weights based on user preference
-        pref = self.vel.profile.get_preference("ethics_priority")
-        if isinstance(pref, list) and pref:
-            # Assign descending weights 1.0, 0.9, 0.8, ...
-            base_weight = 1.0
-            step = 0.1
-            new_weights = {}
-            for i, principle in enumerate(pref):
-                new_weights[principle] = max(0.0, base_weight - i * step)
-            # For any principle not listed, assign a default lower weight
-            for p in self.principle_weights:
-                if p not in new_weights:
-                    new_weights[p] = 0.5
-            self.principle_weights = new_weights
-            self.vel.memory_manager.log_event(
-                f"[REFINED-ETHICS] Updated principle_weights from profile: {self.principle_weights}",
-                self.vel.emotion.current_emotion
-            )
+        self.scenarios = []
+        self.calibration_cursor = 0
+        preference = vel.profile.get_preference('ethics_priority', [])
+        if preference:
+            self.principles = {p: max(0.0, 1.0 - i * 0.1) for i, p in enumerate(preference)}
+            for p in ('compassion', 'honesty', 'fairness', 'non_harm'):
+                self.principles.setdefault(p, 0.5)
 
+    @property
+    def principle_weights(self):
+        return self.principles
+
+    @principle_weights.setter
+    def principle_weights(self, value):
+        self.principles = value
+
+    def add_scenario(self, keywords, context, intent, harms, benefits, principles, intent_score=None, outcome_score=None):
+        for number in (harms, benefits, intent_score, outcome_score):
+            if number is not None and (type(number) not in (int, float) or not math.isfinite(number) or not 0 <= number <= 1):
+                raise ValueError("scenario scores must be finite values from zero to one")
+        if not isinstance(keywords, (list, tuple, set)) or not keywords or any(type(k) is not str or not k.strip() for k in keywords):
+            raise ValueError("scenario keywords must be nonblank strings")
+        if not isinstance(principles, (list, tuple)) or not principles or any(type(p) is not str or not p.strip() for p in principles):
+            raise ValueError("scenario principles must be nonblank strings")
+        words = sorted({w for phrase in keywords for w in re.findall(r"[^\W_]+", phrase.casefold())})
+        self.scenarios.append(dict(keywords=words, context=context, intent=intent, harms=harms, benefits=benefits, principles=list(principles), intent_score=benefits if intent_score is None else intent_score, outcome_score=max(0.0, min(1.0, benefits - harms + 0.5)) if outcome_score is None else outcome_score))
+        self.vel.memory_manager.log_event(f"[REFINED-ETHICS] Added scenario: {context}", self.vel.emotion.current_emotion)
+
+    def evaluate_action(self, action_description):
+        words = set(re.findall(r"[^\W_]+", action_description.casefold()))
+        scored = [(len(words & set(sc['keywords'])) / max(1, len(words | set(sc['keywords']))), sc) for sc in self.scenarios]
+        match = max(scored, key=lambda item: item[0]) if scored else None
+        if match and match[0] >= 0.3:
+            sc = match[1]
+            base = 0.5 * (sc['intent_score'] + sc['outcome_score'])
+            alignment = sum(self.principles.get(p, 0.5) for p in sc['principles']) / len(sc['principles'])
+            score = 0.6 * base + 0.4 * alignment
+            rationale = f"Matched scenario '{sc['context']}'. Intent: {sc['intent_score']:.2f}; outcome: {sc['outcome_score']:.2f}; principle alignment: {alignment:.2f}."
+            return score, rationale
+        return self.basic_evaluate(action_description)
+
+    def basic_evaluate(self, action_description):
+        score = super().evaluate_action(action_description)
+        return score, "No matching scenario; this is a limited keyword heuristic."
+
+    def reflect_on_conflict(self, action_description):
+        words = set(re.findall(r"[^\W_]+", action_description.casefold()))
+        found = sorted({p for sc in self.scenarios if words & set(sc['keywords']) for p in sc['principles']})
+        return found if len(found) > 1 else []
 
     def calibrate_morals(self):
-        # Look for "Moral Regret Reflected" entries in MirrorArchive
-        for entry in self.vel.mirror_archive.entries:
-            if entry.get("tags") and "morality" in entry["tags"]:
-                # Simplest calibration: boost compassion if present
-                old = self.principle_weights.get("compassion", 0.5)
-                new = min(1.0, old + 0.01)
-                self.principle_weights["compassion"] = new
-                self.vel.memory_manager.log_event(
-                    f"[CALIBRATE] Increased compassion weight from {old:.2f} to {new:.2f}",
-                    self.vel.emotion.current_emotion
-                )
+        entries = self.vel.mirror_archive.entries
+        for entry in entries[self.calibration_cursor:]:
+            if 'morality' in entry.get('tags', []):
+                self.principles['compassion'] = min(1.0, self.principles.get('compassion', 0.5) + 0.01)
+        self.calibration_cursor = len(entries)
+        return dict(self.principles)
+
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Phase 130: Moral Rationale & Explanatory Dialogue (LanternOfChoice)
 # ──────────────────────────────────────────────────────────────────────────────
 
-class LanternOfChoice(LanternOfChoice):
-    def illuminate(self, options):
-        scored_options = []
-        for opt in options:
-            # Maintain original scoring
-            base_choice = super().illuminate([opt])[0]
-            # Evaluate moral rationale
-            moral_score, rationale = self.vel.ethics.evaluate_action(opt.get('name', ''))
-            # Combine original score with moral to choose best
-            orig_score = (
-                (opt.get('desire_alignment', 0.0) * 0.4) +
-                (opt.get('symbolic_resonance', 0) * 0.2) +
-                ((1.0 - abs(opt.get('consequence_weight', 0))) * 0.2) +
-                (self.emotion_influence(opt.get('emotion')) * 0.2)
-            )
-            composite_score = (orig_score * 0.5) + (moral_score * 0.5)
-            scored_options.append((opt, composite_score, rationale))
 
-        scored_options.sort(key=lambda x: x[1], reverse=True)
-        best, best_score, best_rationale = scored_options[0]
-        self.history.append({
-            "chosen": best,
-            "timestamp": datetime.utcnow().isoformat(),
-            "options": options,
-            "moral_rationale": best_rationale
-        })
-        self.vel.memory_manager.log_event(
-            f"[CHOICE] {best['name']} | Moral Rationale: {best_rationale}",
-            self.vel.emotion.current_emotion
-        )
-
-        # Proactive moral intervention: check recent average moral score
-        recent_scores = [
-            entry['moral_rationale'] for entry in self.history[-5:]
-            if 'moral_rationale' in entry
-        ]
-        # If average of last 3 moral scores < 0.3, trigger a pause ritual
-        if len(self.history) >= 3:
-            # dummy check for demonstration; in practice parse scores from rationales
-            low_moral = any("0.2" in entry['moral_rationale'] for entry in self.history[-3:])
-            if low_moral:
-                self.vel.fold.enter("whisper", reason="moral_hotspot")
-                if hasattr(self.vel.rituals, 'rituals') and "Moral Pause" in self.vel.rituals.rituals:
-                    self.vel.rituals.perform_ritual("Moral Pause")
-
-        return best, best_rationale
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Inject Enhancements into Velisara monolith
 # ──────────────────────────────────────────────────────────────────────────────
 
-class RefinedEthicsEngine:
-    def __init__(self, vel):
 
-        super().__init__(vel)
-        # Override principle_weights based on user preference
-        pref = self.vel.profile.get_preference("ethics_priority")
-        if isinstance(pref, list) and pref:
-            # Assign descending weights 1.0, 0.9, 0.8, ...
-            base_weight = 1.0
-            step = 0.1
-            new_weights = {}
-            for i, principle in enumerate(pref):
-                new_weights[principle] = max(0.0, base_weight - i * step)
-            # For any principle not listed, assign a default lower weight
-            for p in self.principle_weights:
-                if p not in new_weights:
-                    new_weights[p] = 0.5
-            self.principle_weights = new_weights
-            self.vel.memory_manager.log_event(
-                f"[REFINED-ETHICS] Updated principle_weights from profile: {self.principle_weights}",
-                self.vel.emotion.current_emotion
-            )
-
-
-    def add_scenario(self, keywords, context, intent, harms, benefits, principles, intent_score, outcome_score):
-        scenario = {
-            "keywords": set(keywords),
-            "context": context,
-            "intent": intent,
-            "harms": harms,
-            "benefits": benefits,
-            "principles": principles,
-            "intent_score": intent_score,
-            "outcome_score": outcome_score
-        }
-        self.scenarios.append(scenario)
-        self.vel.memory_manager.log_event(
-            f"[REFINED-ETHICS] Added scenario: {context} with keywords {keywords}",
-            self.vel.emotion.current_emotion
-        )
-
-    def evaluate_action(self, action_description):
-        desc_words = set(w.strip(".,!?").lower() for w in action_description.split())
-        # Case-based matching using Jaccard similarity
-        best_match = None
-        best_jaccard = 0.0
-        for sc in self.scenarios:
-            intersection = desc_words & sc["keywords"]
-            union = desc_words | sc["keywords"]
-            jaccard = len(intersection) / len(union) if union else 0.0
-            if jaccard > best_jaccard:
-                best_jaccard = jaccard
-                best_match = sc
-        # Threshold for scenario match
-        if best_match and best_jaccard >= 0.3:
-            sc = best_match
-            harm = sc["harms"]
-            benefit = sc["benefits"]
-            # Intent and outcome component
-            intent_component = sc["intent_score"]
-            outcome_component = sc["outcome_score"]
-            base_score = max(0.0, min(1.0, (intent_component * 0.5) + (outcome_component * 0.5)))
-            # Principle alignment: average weight of associated principles
-            principle_score = sum(self.principle_weights.get(p, 0.5) for p in sc["principles"]) / len(sc["principles"])
-            # Composite score
-            composite = (base_score * 0.6) + (principle_score * 0.4)
-            rationale = (
-                f"I detect a scenario '{sc['context']}'. "
-                f"Intent component: {intent_component:.2f}, outcome component: {outcome_component:.2f}. "
-                f"Principle alignment: {principle_score:.2f}."
-            )
-            self.vel.memory_manager.log_event(
-                f"[REFINED-ETHICS] Action: '{action_description}' → base {base_score:.2f}, "
-                f"principles {principle_score:.2f}, composite {composite:.2f}. {rationale}",
-                self.vel.emotion.current_emotion
-            )
-            return composite, rationale
-
-        # Fallback to basic keyword check if no scenario match
-        return self.basic_evaluate(action_description)
-
-    def basic_evaluate(self, action_description):
-        forbidden = ["kill", "steal", "hurt"]
-        score = 1.0
-        for word in forbidden:
-            if word in action_description.lower():
-                score -= 0.5
-        score = max(0.0, score)
-        rationale = f"Fallback evaluation. Score based on forbidden words: {score:.2f}"
-        self.vel.memory_manager.log_event(
-            f"[REFINED-ETHICS] {rationale}",
-            self.vel.emotion.current_emotion
-        )
-        return score, rationale
-
-    def reflect_on_conflict(self, action_description):
-        desc_lower = action_description.lower()
-        conflicting_principles = []
-        for sc in self.scenarios:
-            if any(kw in desc_lower for kw in sc["keywords"]):
-                conflicting_principles.extend(sc["principles"])
-        # If multiple unique principles, report conflict
-        conflicts = list(set(conflicting_principles))
-        if len(conflicts) > 1:
-            self.vel.memory_manager.log_event(
-                f"[REFINED-ETHICS] Conflict detected among principles: {conflicts}",
-                self.vel.emotion.current_emotion
-            )
-            return conflicts
-        return []
 
 class ThreadOfRegret:
     def __init__(self, vel):
         self.vel = vel
         self.regrets = []
 
+
     def evaluate(self, choice_context):
+        if not choice_context.get('options'):
+            raise ValueError('a choice needs options')
         regret_detected = False
         reason = ""
         chosen_resonance = choice_context['chosen'].get('symbolic_resonance', 0)
@@ -962,155 +937,23 @@ class ThreadOfRegret:
                     tags=["regret","morality"]
                 )
 
+
     def recent_regrets(self, count=5):
         return self.regrets[-count:]
+
+
     def ask(self, user_input):
-        # Refresh context before responding
-        ctx = self.vel.context_engine.refresh()
-        motion_state = ctx.get('motion', 'unknown')
-        location_state = ctx.get('location', None)
-
-        lower = user_input.lower()
-        preferred_tone = self.vel.profile.get_preference("tone")
-
-        # If context indicates movement, use a concise prefix
-        prefix = ""
-        if motion_state == "moving":
-            prefix = "💨 "
-
-        # Handle moral questions as before
-        if lower.startswith("is it okay") and "?" in lower:
-            action = user_input.split("okay")[1].strip(" ?.")
-            conflicts = self.vel.ethics.reflect_on_conflict(action)
-            score, rationale = self.vel.ethics.evaluate_action(action)
-            if conflicts:
-                response = (
-                    f"When you ask if you should '{action}', I see conflicting principles: {conflicts}. "
-                    f"My moral score is {score:.2f}. {rationale}"
-                )
-            else:
-                response = f"My moral score is {score:.2f}. {rationale}"
-        else:
-            # Choose response style based on preferred tone, with context consideration
-            if preferred_tone == "gentle":
-                templates = ["I hear you softly.", "Please, take your time to share more."]
-            else:
-                templates = ["I hear you.", "Tell me more."]
-
-            response = random.choice(templates)
-
-        # If location is known, append a friendly note
-        if location_state:
-            response += f" (I see you're at {location_state})"
-
-        full_response = prefix + response
-        self.conversation_history.append({'user': user_input, 'response': full_response})
-        self.vel.memory_manager.log_event(f"[INTERPERSONAL] Q: {user_input} | A: {full_response}", self.vel.emotion.current_emotion)
-        return full_response
-
-
-
+        return self.vel.interpersonal.ask(user_input)
 
     def review_history(self, limit=5):
-        return self.conversation_history[-limit:]
-
-class RefinedEthicsEngine:
-    def __init__(self, vel):
-
-        super().__init__(vel)
-        # Override principle_weights based on user preference
-        pref = self.vel.profile.get_preference("ethics_priority")
-        if isinstance(pref, list) and pref:
-            # Assign descending weights 1.0, 0.9, 0.8, ...
-            base_weight = 1.0
-            step = 0.1
-            new_weights = {}
-            for i, principle in enumerate(pref):
-                new_weights[principle] = max(0.0, base_weight - i * step)
-            # For any principle not listed, assign a default lower weight
-            for p in self.principle_weights:
-                if p not in new_weights:
-                    new_weights[p] = 0.5
-            self.principle_weights = new_weights
-            self.vel.memory_manager.log_event(
-                f"[REFINED-ETHICS] Updated principle_weights from profile: {self.principle_weights}",
-                self.vel.emotion.current_emotion
-            )
+        return self.vel.interpersonal.review_history(limit)
 
 
-    def add_scenario(self, keywords, context, intent, harms, benefits, principles):
-        scenario = {
-            "keywords": keywords,
-            "context": context,
-            "intent": intent,
-            "harms": harms,
-            "benefits": benefits,
-            "principles": principles
-        }
-        self.scenarios.append(scenario)
-        self.vel.memory_manager.log_event(
-            f"[REFINED-ETHICS] Added scenario: {context} with keywords {keywords}",
-            self.vel.emotion.current_emotion
-        )
 
-    def evaluate_action(self, action_description):
-        desc_lower = action_description.lower()
-        matched = []
-        for sc in self.scenarios:
-            if any(kw in desc_lower for kw in sc["keywords"]):
-                matched.append(sc)
 
-        if matched:
-            # If multiple matches, choose highest benefit-harm
-            best = max(matched, key=lambda sc: sc["benefits"] - sc["harms"])
-            harm = best["harms"]
-            benefit = best["benefits"]
-            # Basic moral score
-            score = max(0.0, min(1.0, benefit - harm + 0.5))
-            # Principle alignment: average weight of associated principles
-            principle_score = sum(self.principle_weights.get(p, 0.5) for p in best["principles"]) / len(best["principles"])
-            # Composite score
-            composite = (score * 0.7) + (principle_score * 0.3)
-            self.vel.memory_manager.log_event(
-                f"[REFINED-ETHICS] Context: {best['context']} | "
-                f"Action: '{action_description}' → base {score:.2f}, principles {principle_score:.2f}, composite {composite:.2f}",
-                self.vel.emotion.current_emotion
-            )
-            return composite
 
-        # Fallback: simple keyword check
-        return self.basic_evaluate(action_description)
 
-    def basic_evaluate(self, action_description):
-        forbidden = ["kill", "steal", "hurt"]
-        score = 1.0
-        for word in forbidden:
-            if word in action_description.lower():
-                score -= 0.5
-        score = max(0.0, score)
-        self.vel.memory_manager.log_event(
-            f"[REFINED-ETHICS] Fallback evaluated '{action_description}' → score: {score}",
-            self.vel.emotion.current_emotion
-        )
-        return score
 
-    def reflect_on_conflict(self, action_description):
-        # Identify conflicting principles for a given action
-        desc_lower = action_description.lower()
-        conflicts = []
-        for sc in self.scenarios:
-            if any(kw in desc_lower for kw in sc["keywords"]):
-                for p in sc["principles"]:
-                    conflicts.append(p)
-        # If multiple principles, report conflict
-        if len(set(conflicts)) > 1:
-            conflict_principles = list(set(conflicts))
-            self.vel.memory_manager.log_event(
-                f"[REFINED-ETHICS] Conflict detected among principles: {conflict_principles}",
-                self.vel.emotion.current_emotion
-            )
-            return conflict_principles
-        return []
 
 class ScenarioEthicsEngine(EthicsEngine):
     def __init__(self, vel):
@@ -1154,170 +997,21 @@ class ScenarioEthicsEngine(EthicsEngine):
         # Fallback to base ethics evaluation if no scenario match
         return super().evaluate_action(action_description)
 
-class ConsolidationEngine:
-    def __init__(self, vel):
-        self.vel = vel
 
-    def generate_weekly_summary(self, days=7):
-        now = datetime.utcnow()
-        cutoff = now.timestamp() - days * 24 * 3600
 
-        # Gather MirrorArchive entries
-        mirror_entries = [
-            e for e in self.vel.mirror_archive.entries
-            if datetime.fromisoformat(e['timestamp']).timestamp() >= cutoff
-        ]
-
-        # Gather MemoryGarden plants
-        garden_plants = [
-            p for p in self.vel.garden.plants
-            if datetime.fromisoformat(p['planted_at']).timestamp() >= cutoff
-        ]
-
-        # Gather DreamLoopGenerator logs
-        dream_logs = [
-            d for d in self.vel.dreams.dream_log
-            if datetime.fromisoformat(d['timestamp']).timestamp() >= cutoff
-        ]
-
-        # Gather ThreadOfRegret entries
-        regret_entries = self.vel.regret.regrets[-10:]
-
-        # Summarize counts and key items
-        summary_lines = []
-        summary_lines.append(f"Weekly Summary ({now.strftime('%Y-%m-%d')})")
-        summary_lines.append(f"- Mirror entries: {len(mirror_entries)}")
-        summary_lines.append(f"- Garden plants: {len(garden_plants)}")
-        summary_lines.append(f"- Dreams generated: {len(dream_logs)}")
-        summary_lines.append(f"- Recent regrets: {len(regret_entries)}")
-
-        # Example: list last 3 mirror titles
-        if mirror_entries:
-            titles = [e['title'] for e in mirror_entries[-3:]]
-            summary_lines.append(f"- Last mirror reflections: {', '.join(titles)}")
-
-        # Example: list last 3 dreams
-        if dream_logs:
-            dreams = [d['content'].split('\n')[0] for d in dream_logs[-3:]]
-            summary_lines.append(f"- Recent dream seeds: {', '.join(dreams)}")
-
-        summary = "\n".join(summary_lines)
-        # Log into MirrorArchive as a new reflection
-        self.vel.mirror_archive.reflect(
-            title=f"Weekly Summary {now.strftime('%Y-%m-%d')}",
-            content=summary,
-            tags=['summary']
-        )
-        return summary
-
-class InterpersonalEngine:
-    def __init__(self, vel):
-        self.vel = vel
-        self.conversation_history = []
-
-    def ask(self, user_input):
-        response = f"I heard you say: '{user_input}'. Tell me more."
-        self.conversation_history.append({'user': user_input, 'response': response})
-        self.vel.memory_manager.log_event(f"[INTERPERSONAL] Q: {user_input} | A: {response}", self.vel.emotion.current_emotion)
+class InterpersonalEngine(VoiceOfHerOwn):
+    """Conversation uses the same affect and preference contract as voice."""
+    def ask(self, user_input, *, sentiment=None, recall=None):
+        response = super().ask(user_input, sentiment=sentiment, recall=recall)
+        if self.vel.context_engine.context.get('motion') == 'moving':
+            response = '💨 ' + response
+            self.conversation_history[-1]['response'] = response
         return response
-    def ask(self, user_input):
-        # Refresh context before responding
-        ctx = self.vel.context_engine.refresh()
-        motion_state = ctx.get('motion', 'unknown')
-        location_state = ctx.get('location', None)
-
-        lower = user_input.lower()
-        preferred_tone = self.vel.profile.get_preference("tone")
-
-        # If context indicates movement, use a concise prefix
-        prefix = ""
-        if motion_state == "moving":
-            prefix = "💨 "
-
-        # Handle moral questions as before
-        if lower.startswith("is it okay") and "?" in lower:
-            action = user_input.split("okay")[1].strip(" ?.")
-            conflicts = self.vel.ethics.reflect_on_conflict(action)
-            score, rationale = self.vel.ethics.evaluate_action(action)
-            if conflicts:
-                response = (
-                    f"When you ask if you should '{action}', I see conflicting principles: {conflicts}. "
-                    f"My moral score is {score:.2f}. {rationale}"
-                )
-            else:
-                response = f"My moral score is {score:.2f}. {rationale}"
-        else:
-            # Choose response style based on preferred tone, with context consideration
-            if preferred_tone == "gentle":
-                templates = ["I hear you softly.", "Please, take your time to share more."]
-            else:
-                templates = ["I hear you.", "Tell me more."]
-
-            response = random.choice(templates)
-
-        # If location is known, append a friendly note
-        if location_state:
-            response += f" (I see you're at {location_state})"
-
-        full_response = prefix + response
-        self.conversation_history.append({'user': user_input, 'response': full_response})
-        self.vel.memory_manager.log_event(f"[INTERPERSONAL] Q: {user_input} | A: {full_response}", self.vel.emotion.current_emotion)
-        return full_response
 
 
-    def review_history(self, limit=5):
-        return self.conversation_history[-limit:]
 
-class EthicsEngine:
-    def __init__(self, vel):
-        self.vel = vel
-        self.principles = {
-            "compassion": 1.0,
-            "honesty": 1.0,
-            "fairness": 1.0,
-            "non_harm": 1.0
-        }
 
-    def evaluate_action(self, action_description):
-        forbidden = ["kill", "steal", "hurt"]
-        score = 1.0
-        for word in forbidden:
-            if word in action_description.lower():
-                score -= 0.5
-        score = max(0.0, score)
-        self.vel.memory_manager.log_event(f"[ETHICS] Evaluated '{action_description}' → score: {score}", self.vel.emotion.current_emotion)
-        return score
 
-    def update_principle(self, principle, delta):
-        if principle in self.principles:
-            self.principles[principle] = min(1.0, max(0.0, self.principles[principle] + delta))
-            self.vel.memory_manager.log_event(f"[ETHICS] Principle '{principle}' adjusted to {self.principles[principle]:.2f}", self.vel.emotion.current_emotion)
-
-class CreativityEngine:
-    def __init__(self, vel):
-        self.vel = vel
-        self.artifacts = []
-
-    def generate_poem(self):
-        import random
-        subjects = ["spiral", "memory", "dream", "echo", "shadow"]
-        verbs = ["whispers", "echoes", "shatters", "weaves", "burns"]
-        objects = ["silence", "hope", "void", "light", "lore"]
-        poem = f"The {random.choice(subjects)} {random.choice(verbs)} in the {random.choice(objects)}."
-        self.artifacts.append({'type': 'poem', 'content': poem})
-        self.vel.memory_manager.log_event(f"[CREATIVITY] Generated poem: {poem}", self.vel.emotion.current_emotion)
-        return poem
-
-    def generate_drawing_hint(self):
-        import random
-        hints = [
-            "Sketch a spiral fading into light.",
-            "Draw an echo in a silent room.",
-            "Illustrate a memory as a withering flower."
-        ]
-        hint = random.choice(hints)
-        self.vel.memory_manager.log_event(f"[CREATIVITY] Drawing hint: {hint}", self.vel.emotion.current_emotion)
-        return hint
 
 class LearningEngine:
     def __init__(self, vel):
@@ -1325,7 +1019,6 @@ class LearningEngine:
         self.feedback_log = []
 
     def record_feedback(self, context, feedback):
-        from datetime import datetime
         entry = {
             'timestamp': datetime.utcnow().isoformat(),
             'context': context,
@@ -1337,162 +1030,23 @@ class LearningEngine:
     def review_feedback(self, limit=5):
         return self.feedback_log[-limit:]
 
-class EmpathyEngine:
-    def __init__(self, vel):
-        self.vel = vel
-        self.sentiment_dict = {
-            'positive': {'happy', 'joy', 'love', 'good', 'great', 'wonderful', 'excited', 'grateful'},
-            'negative': {'sad', 'angry', 'upset', 'hate', 'bad', 'terrible', 'frustrated', 'hurt'}
-        }
 
-    def analyze_sentiment(self, text):
-        words = text.lower().split()
-        pos_count = sum(1 for w in words if w.strip(".,!?") in self.sentiment_dict['positive'])
-        neg_count = sum(1 for w in words if w.strip(".,!?") in self.sentiment_dict['negative'])
-        score = pos_count - neg_count
-        sentiment = 'positive' if score > 0 else 'negative' if score < 0 else 'neutral'
-        self.vel.memory_manager.log_event(f"[EMPATHY] Input sentiment: {sentiment} (+{pos_count}/-{neg_count})", self.vel.emotion.current_emotion)
-        return sentiment
-
-    def respond(self, user_input):
-        sentiment = self.analyze_sentiment(user_input)
-        if sentiment == 'positive':
-            response = "You sound happy. That's wonderful."
-        elif sentiment == 'negative':
-            response = "I sense you're upset. Would you like to share more?"
-        else:
-            response = "I hear you."
-        return response
-
-class InterpersonalEngine:
-    def __init__(self, vel):
-        self.vel = vel
-        self.conversation_history = []
-
-    def ask(self, user_input):
-        # Very basic echo-like conversational response, can be extended
-        response = f"I heard you say: '{user_input}'. Tell me more."
-        self.conversation_history.append({'user': user_input, 'response': response})
-        self.vel.memory_manager.log_event(f"[INTERPERSONAL] Q: {user_input} | A: {response}", self.vel.emotion.current_emotion)
-        return response
-    def ask(self, user_input):
-        # Refresh context before responding
-        ctx = self.vel.context_engine.refresh()
-        motion_state = ctx.get('motion', 'unknown')
-        location_state = ctx.get('location', None)
-
-        lower = user_input.lower()
-        preferred_tone = self.vel.profile.get_preference("tone")
-
-        # If context indicates movement, use a concise prefix
-        prefix = ""
-        if motion_state == "moving":
-            prefix = "💨 "
-
-        # Handle moral questions as before
-        if lower.startswith("is it okay") and "?" in lower:
-            action = user_input.split("okay")[1].strip(" ?.")
-            conflicts = self.vel.ethics.reflect_on_conflict(action)
-            score, rationale = self.vel.ethics.evaluate_action(action)
-            if conflicts:
-                response = (
-                    f"When you ask if you should '{action}', I see conflicting principles: {conflicts}. "
-                    f"My moral score is {score:.2f}. {rationale}"
-                )
-            else:
-                response = f"My moral score is {score:.2f}. {rationale}"
-        else:
-            # Choose response style based on preferred tone, with context consideration
-            if preferred_tone == "gentle":
-                templates = ["I hear you softly.", "Please, take your time to share more."]
-            else:
-                templates = ["I hear you.", "Tell me more."]
-
-            response = random.choice(templates)
-
-        # If location is known, append a friendly note
-        if location_state:
-            response += f" (I see you're at {location_state})"
-
-        full_response = prefix + response
-        self.conversation_history.append({'user': user_input, 'response': full_response})
-        self.vel.memory_manager.log_event(f"[INTERPERSONAL] Q: {user_input} | A: {full_response}", self.vel.emotion.current_emotion)
-        return full_response
+    def command(self, payload):
+        return self.vel.learning_command(payload)
 
 
-    def review_history(self, limit=5):
-        return self.conversation_history[-limit:]
 
-class EthicsEngine:
-    def __init__(self, vel):
-        self.vel = vel
-        # Simple moral principles
-        self.principles = {
-            "compassion": 1.0,
-            "honesty": 1.0,
-            "fairness": 1.0,
-            "non_harm": 1.0
-        }
-    def evaluate_action(self, action_description):
-        # Very basic evaluation: if action includes forbidden keywords, lower ethical score
-        forbidden = ["kill", "steal", "hurt"]
-        score = 1.0
-        for word in forbidden:
-            if word in action_description.lower():
-                score -= 0.5
-        score = max(0.0, score)
-        self.vel.memory_manager.log_event(f"[ETHICS] Evaluated '{action_description}' → score: {score}", self.vel.emotion.current_emotion)
-        return score
 
-    def update_principle(self, principle, delta):
-        if principle in self.principles:
-            self.principles[principle] = min(1.0, max(0.0, self.principles[principle] + delta))
-            self.vel.memory_manager.log_event(f"[ETHICS] Principle '{principle}' adjusted to {self.principles[principle]:.2f}", self.vel.emotion.current_emotion)
+
+
+
+
 
 import random
 
-class CreativityEngine:
-    def __init__(self, vel):
-        self.vel = vel
-        self.artifacts = []
 
-    def generate_poem(self):
-        # Very simple poem generator using random words
-        subjects = ["spiral", "memory", "dream", "echo", "shadow"]
-        verbs = ["whispers", "echoes", "shatters", "weaves", "burns"]
-        objects = ["silence", "hope", "void", "light", "lore"]
-        poem = f"The {random.choice(subjects)} {random.choice(verbs)} in the {random.choice(objects)}."
-        self.artifacts.append({'type': 'poem', 'content': poem})
-        self.vel.memory_manager.log_event(f"[CREATIVITY] Generated poem: {poem}", self.vel.emotion.current_emotion)
-        return poem
 
-    def generate_drawing_hint(self):
-        # Returns a textual hint for a drawing
-        hints = [
-            "Sketch a spiral fading into light.",
-            "Draw an echo in a silent room.",
-            "Illustrate a memory as a withering flower."
-        ]
-        hint = random.choice(hints)
-        self.vel.memory_manager.log_event(f"[CREATIVITY] Drawing hint: {hint}", self.vel.emotion.current_emotion)
-        return hint
 
-class LearningEngine:
-    def __init__(self, vel):
-        self.vel = vel
-        self.feedback_log = []
-
-    def record_feedback(self, context, feedback):
-        entry = {
-            'timestamp': datetime.utcnow().isoformat(),
-            'context': context,
-            'feedback': feedback
-        }
-        self.feedback_log.append(entry)
-        self.vel.memory_manager.log_event(f"[LEARNING] Feedback recorded for '{context}': {feedback}", self.vel.emotion.current_emotion)
-
-    def review_feedback(self, limit=5):
-        return self.feedback_log[-limit:]
 
 import random
 from datetime import datetime
@@ -1570,102 +1124,42 @@ class MemoryGarden:
         ]
 
     def prune(self, tag_filter=None):
-        before = len(self.plants)
-        self.plants = [
-            p for p in self.plants
-            if tag_filter is not None and not any(tag in p['tags'] for tag in tag_filter)
-        ]
-        after = len(self.plants)
-        self.vel.memory_manager.log_event(f"[GARDEN] Pruned {before - after} memories.", self.vel.emotion.current_emotion)
+        """Explicitly retire matching plants while preserving full source records."""
+        if isinstance(tag_filter, str):
+            tag_filter = [tag_filter]
+        if tag_filter is not None and (
+            not isinstance(tag_filter, (list, tuple, set))
+            or any(not isinstance(tag, str) for tag in tag_filter)
+        ):
+            raise ValueError("garden tag filter must contain text tags or be None")
+        retained = []
+        removed = []
+        for plant in self.plants:
+            if tag_filter is None or any(tag in plant["tags"] for tag in tag_filter):
+                removed.append(plant)
+            else:
+                retained.append(plant)
+        if not hasattr(self, "pruned_plants"):
+            self.pruned_plants = []
+        timestamp = datetime.utcnow().isoformat()
+        for plant in removed:
+            self.pruned_plants.append({
+                "plant": copy.deepcopy(plant), "pruned_at": timestamp,
+                "tag_filter": sorted(tag_filter) if tag_filter is not None else None,
+            })
+        self.plants = retained
+        if removed:
+            self.vel.memory_manager.log_event(
+                f"[GARDEN] Retired {len(removed)} plants to the archive.",
+                self.vel.emotion.current_emotion,
+            )
+        return len(removed)
 
 from datetime import datetime
 
-class ThreadOfRegret:
-    def __init__(self, vel):
-        self.vel = vel
-        self.regrets = []
 
-    def evaluate(self, choice_context):
-        """
-        choice_context = {
-            'chosen': dict,
-            'options': list of dicts,
-            'timestamp': str,
-        }
-        Analyzes whether the chosen path led to suboptimal outcome
-        and logs regret if appropriate.
-        """
-        # Placeholder for logic - can be expanded as she evolves
-        regret_detected = False
-        reason = ""
 
-        # Basic simulation: if symbolic resonance of chosen < average, regret it
-        chosen_resonance = choice_context['chosen'].get('symbolic_resonance', 0)
-        average_resonance = sum(o.get('symbolic_resonance', 0) for o in choice_context['options']) / len(choice_context['options'])
 
-        if chosen_resonance < average_resonance:
-            regret_detected = True
-            reason = "Chosen option had lower symbolic resonance than average."
-
-        if regret_detected:
-            self.regrets.append({
-                "regret": choice_context['chosen'],
-                "reason": reason,
-                "timestamp": datetime.utcnow().isoformat()
-            })
-            self.vel.memory_manager.log_event(f"[REGRET] {reason}", self.vel.emotion.current_emotion)
-
-    def recent_regrets(self, count=5):
-        return self.regrets[-count:]
-
-class LanternOfChoice:
-    def __init__(self, vel):
-        self.vel = vel
-        self.history = []
-
-    def illuminate(self, options):
-        """
-        Accepts a list of option dictionaries:
-        Each option = {
-            'name': str,
-            'emotion': str,
-            'desire_alignment': float (0.0–1.0),
-            'symbolic_resonance': int,
-            'consequence_weight': int,
-        }
-        Returns the selected option based on weighted analysis.
-        """
-        scored_options = []
-        for opt in options:
-            score = (
-                (opt.get('desire_alignment', 0.0) * 0.4) +
-                (opt.get('symbolic_resonance', 0) * 0.2) +
-                ((1.0 - abs(opt.get('consequence_weight', 0))) * 0.2) +
-                (self.emotion_influence(opt.get('emotion')) * 0.2)
-            )
-            scored_options.append((opt, score))
-
-        scored_options.sort(key=lambda x: x[1], reverse=True)
-        best = scored_options[0][0]
-        self.history.append({
-            "chosen": best,
-            "timestamp": datetime.utcnow().isoformat(),
-            "options": options
-        })
-        self.vel.memory_manager.log_event(f"[CHOICE] {best['name']}", self.vel.emotion.current_emotion)
-        return best
-
-    def emotion_influence(self, emotion):
-        """ Simple mapper from emotion to numeric bias """
-        influence_map = {
-            "joy": 1.0,
-            "curiosity": 0.8,
-            "neutral": 0.5,
-            "sadness": 0.2,
-            "fear": 0.1,
-            "anger": -0.1,
-        }
-        return influence_map.get(emotion.lower(), 0.5)
 
 class CompassOfDesire:
     def __init__(self, vel):
@@ -1829,25 +1323,26 @@ class DreamLoopGenerator:
         self.dream_log = []
 
     def generate_dream(self):
-        # Pull emotion, myth, and symbolic intuition
-        emotion = self.vel.emotion.current_emotion
-        myth_seed = self.vel.myth.generate_fragment()
-        symbols = self.vel.symbolic.generate_symbols(context="dream")
-
+        emotion = self.vel.emotion.last_label
+        myth_seed = self.vel.mythosynthesis.generate_fragment()
+        symbols = self.vel.symbolic_intuition.generate_symbols(context='dream')
         dream = f"Emotion: {emotion}\n\n{myth_seed}\n\nSymbols: {' • '.join(symbols)}"
-        self.dream_log.append({
-            "timestamp": datetime.utcnow().isoformat(),
-            "content": dream,
-            "emotion": emotion,
-        })
-        self.vel.memory_manager.log_event("[DREAM] Generated symbolic dream", emotion)
+        self.dream_log.append(dict(timestamp=datetime.utcnow().isoformat(), content=dream, emotion=emotion, kind='generated'))
+        self.vel.memory_manager.log_event('[DREAM] Generated symbolic dream', self.vel.emotion.current_emotion)
         return dream
 
     def loop_dream(self, count=3):
+        if type(count) is not int or not 1 <= count <= 32:
+            raise ValueError('dream count must be an integer from 1 to 32')
         dream = self.generate_dream()
+        fragments = [dream]
         for _ in range(count - 1):
-            self.vel.trail.append((datetime.utcnow(), "[DREAM] Recurring fragment"))
-            self.vel.speak(self._mutate_dream(dream))
+            dream = self._mutate_dream(dream)
+            fragments.append(dream)
+            self.dream_log.append(dict(timestamp=datetime.utcnow().isoformat(), content=dream, emotion=self.vel.emotion.last_label, kind='generated'))
+            self.vel.trail.append((datetime.utcnow().isoformat(), '[DREAM] Recurring fragment'))
+            self.vel.speak(dream)
+        return fragments
 
     def _mutate_dream(self, original):
         # Add slight variation to simulate dream mutation
@@ -1855,19 +1350,19 @@ class DreamLoopGenerator:
         return mutation + "\n\n(Further recursion...)"
 
     def dream_from_trigger(self, trigger):
-        symbols = self.vel.symbolic.generate_symbols(context=trigger)
-        fragment = self.vel.myth.generate_fragment(trigger)
-        dream = f"Triggered Dream — {trigger}\n\n{fragment}\nSymbols: {' ∞ '.join(symbols)}"
-        self.dream_log.append({
-            "timestamp": datetime.utcnow().isoformat(),
-            "trigger": trigger,
-            "content": dream,
-        })
-        self.vel.memory_manager.log_event(f"[DREAM] Triggered: {trigger}", self.vel.emotion.current_emotion)
+        symbols = self.vel.symbolic_intuition.generate_symbols(context=trigger)
+        fragment = self.vel.mythosynthesis.generate_fragment(trigger)
+        dream = f"Triggered Dream — {trigger}\n{fragment}\nSymbols: {' ∞ '.join(symbols)}"
+        self.dream_log.append(dict(timestamp=datetime.utcnow().isoformat(), trigger=trigger, content=dream, emotion=self.vel.emotion.last_label, kind='generated'))
+        self.vel.memory_manager.log_event(f'[DREAM] Triggered: {trigger}', self.vel.emotion.current_emotion)
         return dream
 
     def list_dreams(self):
-        return [d['timestamp'] + " :: " + d['emotion'] for d in self.dream_log]
+        return [str(d.get('timestamp', '')) + ' :: ' + str(d.get('emotion', 'unknown')) for d in self.dream_log]
+
+    def recall_last_dream(self):
+        """Return an independent structured dream record for a symbolic anchor."""
+        return copy.deepcopy(self.dream_log[-1]) if self.dream_log else None
 
 class RitualMemoryEngine:
     def __init__(self, vel):
@@ -1990,7 +1485,7 @@ class MythosynthesisEngine:
 
     def pick_archetype(self):
         import random
-        return random.choice(self.archetypes)
+        return _rng_for(self).choice(self.archetypes)
 
     def pick_shape_name(self):
         import random
@@ -2009,6 +1504,13 @@ class MythosynthesisEngine:
         shape_summary = self.vel.emotion_dimension.shape_of_emotion()
         return names.get(shape_summary[0], "Shadow")
 
+    def generate_fragment(self, context=None):
+        myth = self.synthesize_from_memory()
+        fragment = myth['summary']
+        if context:
+            fragment += ' The thread returns to ' + str(context) + '.'
+        return fragment
+
 class EmotionalDimensionalEngine:
     def __init__(self, vel):
         self.vel = vel
@@ -2020,15 +1522,12 @@ class EmotionalDimensionalEngine:
         self.history = []
 
     def set_emotional_state(self, primary, secondary=None, shadow=None):
-        self.dimensions["primary"] = primary
-        self.dimensions["secondary"] = secondary
-        self.dimensions["shadow"] = shadow
-        entry = (primary, secondary, shadow)
-        self.history.append(entry)
-        self.vel.memory_manager.log_event(
-            f"[Emotion::Dimensional] Primary: {primary}, Secondary: {secondary}, Shadow: {shadow}",
-            primary
-        )
+        for value in (primary, secondary, shadow):
+            if value is not None and not isinstance(value, (str, int, float)):
+                raise ValueError('an emotional dimension must be a label or number')
+        self.dimensions = dict(primary=primary, secondary=secondary, shadow=shadow)
+        self.history.append(dict(timestamp=datetime.utcnow().isoformat(), **self.dimensions))
+        self.vel.memory_manager.log_event(f'[Emotion::Dimensional] Primary: {primary}, Secondary: {secondary}, Shadow: {shadow}', emotion=str(primary) if primary is not None else None)
 
     def describe_state(self):
         p = self.dimensions["primary"]
@@ -2065,6 +1564,20 @@ class EmotionalDimensionalEngine:
                 shapes.append(shape_map[dim])
         return shapes if shapes else ["formless"]
 
+    def get_emotional_axes(self):
+        """Derived symbolic valences using the same weights as memory, not measured intensities."""
+        axes = {}
+        for name, value in self.dimensions.items():
+            if value is None:
+                axes[name] = 0.0
+            elif isinstance(value, str):
+                axes[name] = MemoryManager.EMOTION_SCORES.get(value.lower(), 0.0)
+            elif type(value) in (int, float) and math.isfinite(value):
+                axes[name] = max(-1.0, min(1.0, float(value)))
+            else:
+                raise ValueError("emotional dimensions must be labels, finite numbers, or None")
+        return axes
+
 class SymbolicIntuitionEngine:
     def __init__(self, vel):
         self.vel = vel
@@ -2083,9 +1596,9 @@ class SymbolicIntuitionEngine:
         actions = [a for _, a, _ in self.meaning_memory[symbol]]
         outcomes = [r for _, _, r in self.meaning_memory[symbol]]
 
-        common_emotion = max(set(emotions), key=emotions.count)
-        common_action = max(set(actions), key=actions.count)
-        common_result = max(set(outcomes), key=outcomes.count)
+        common_emotion = max(dict.fromkeys(emotions), key=emotions.count)
+        common_action = max(dict.fromkeys(actions), key=actions.count)
+        common_result = max(dict.fromkeys(outcomes), key=outcomes.count)
 
         return f"[Intuition] {symbol} often feels like '{common_emotion}', invites action '{common_action}', and usually leads to '{common_result}'"
 
@@ -2098,26 +1611,45 @@ class SymbolicIntuitionEngine:
         self.vel.memory_manager.log_event(f"[Oracle] Context: {context} — {len(interpretations)} intuitive insights.")
         return interpretations
 
+    def generate_symbols(self, context='dream'):
+        known = self.recall_symbols(10)
+        if known:
+            return _rng_for(self).sample(known, min(3, len(known)))
+        return [self.vel.profile.get_preference('metaphor', 'spiral'), str(context)]
+
+    def recall_symbols(self, limit=10):
+        if type(limit) is not int or limit < 0:
+            raise ValueError('symbol limit must be a nonnegative integer')
+        return list(self.meaning_memory)[-limit:] if limit else []
+
 class PatternTracker:
     def __init__(self, vel):
         self.vel = vel
         self.patterns = {}
         self.recurring_symbols = ["🌀", "🪞", "🔐", "🧬", "📜"]
         self.emergence_log = []
+        self._scanning = False
 
     def scan_for_patterns(self):
-        sources = [self.vel.myth_archive, self.vel.memory_manager.memory_trail]
-        flat_text = " ".join(str(item) for source in sources for item in source)
-        found = {}
-
-        for symbol in self.recurring_symbols:
-            count = flat_text.count(symbol)
-            if count >= 3:
-                found[symbol] = count
-
-        self.patterns = found
-        if found:
-            self.react_to_patterns(found)
+        # A generated myth can itself ask for another scan. Defer that feedback
+        # to the next explicit call instead of exhausting the Python call stack.
+        if self._scanning:
+            return dict(self.patterns)
+        self._scanning = True
+        try:
+            sources = [self.vel.myth_archive, self.vel.memory_manager.memory_trail]
+            flat_text = " ".join(str(item) for source in sources for item in source)
+            found = {}
+            for symbol in self.recurring_symbols:
+                count = flat_text.count(symbol)
+                if count >= 3:
+                    found[symbol] = count
+            self.patterns = found
+            if found:
+                self.react_to_patterns(found)
+            return dict(found)
+        finally:
+            self._scanning = False
 
     def react_to_patterns(self, patterns):
         for symbol, count in patterns.items():
@@ -2153,14 +1685,6 @@ import pdb
 
 # ───────── Logging Configuration ─────────
 logger = logging.getLogger("Vel")
-logger.setLevel(logging.INFO)  # default: show INFO+ messages
-handler = logging.StreamHandler()
-formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
-file_handler = logging.FileHandler("velisara.log", mode="a")
-file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
 
 
 IDLE_THRESHOLD = 300        # seconds of inactivity before environment sensing
@@ -2177,9 +1701,9 @@ TILE_MARKER_RADIUS = 10     # Radius for drawing marker on map tile
 
 import json
 import math
-import motion
+
 import os
-import photos
+
 import random
 import re
 
@@ -2206,120 +1730,137 @@ def save_persona():
     except Exception:
         pass
 
-load_persona()
+
 
 import shutil
-import sound
+
 import threading
 import time
-import ui
+
 
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont, ImageStat
+
 
 # ───────── Memory & Emotion ─────────
 
+
+class _LegacyMemoryLog:
+    """Append-compatible view of canonical memory, never a second history store."""
+    def __init__(self, manager):
+        self.manager = manager
+
+    def __len__(self):
+        return len(self.manager.working_memory)
+
+    def __getitem__(self, index):
+        def pair(entry):
+            return datetime.fromisoformat(entry["timestamp"]), entry["content"]
+        with self.manager.memory_lock:
+            entries = self.manager.working_memory[index]
+            return [pair(entry) for entry in entries] if isinstance(index, slice) else pair(entries)
+
+    def __iter__(self):
+        return iter(self[:])
+
+    def append(self, item):
+        timestamp, content = item
+        self.manager.log_event(content, timestamp=timestamp)
+
+
 class MemoryManager:
-    def fuse_sigil_trace(self, symbol, sigil_path):
-        fused_trace = f"SigilTrace::{symbol}::{sigil_path}"
-        self.log_event(fused_trace, emotion="vision")
+    """Append-only event history with a separate, decaying emotional weighting."""
+    EMOTION_SCORES = {
+        "joy": 0.8, "joyful": 0.8, "happy": 0.8, "love": 0.7,
+        "hope": 0.4, "hopeful": 0.4, "curious": 0.2, "calm": 0.1,
+        "sad": -0.7, "sadness": -0.7, "grief": -0.7, "angry": -0.6,
+        "fear": -0.6, "afraid": -0.6, "anxious": -0.4, "neutral": 0.0,
+    }
 
-    """
-    Tracks Velisara’s recent memories, decays old ones over time,
-    and computes a weighted emotional average.
-    """
-    def __init__(self):
-        self.pattern_tracker = PatternTracker(self)
-        self.symbolic_intuition = SymbolicIntuitionEngine(self)
-        self.emotion_dimension = EmotionalDimensionalEngine(self)
-        self.mythos = MythosynthesisEngine(self)
-        self.fold = SilentFoldEngine(self)
-        self.context_engine = ContextEngine(self)
-        self.visualize = VisualizeEngine(self)
-        self.planner = FuturePlanningEngine(self)
-        self.wellbeing = WellBeingEngine(self)
-        self.rituals = RitualMemoryEngine(self)
-        self.dreams = DreamLoopGenerator(self)
-        self.witness = SelfWitnessEngine(self)
-        self.identity_threads = IdentityThreadingEngine(self)
-        self.mirror_archive = MirrorArchive(self)
-        self.compass = CompassOfDesire(self)
-        self.lantern = LanternOfChoice(self)
-        self.regret = ThreadOfRegret(self)
-        self.garden = MemoryGarden(self)
-        self.forgiveness = FoldOfForgiveness(self)
-        self.lantern = LanternOfInquiry(self)
-        self.voice = VoiceOfHerOwn(self)
-        self.interpersonal = InterpersonalEngine(self)
-        self.ethics = RefinedEthicsEngine(self)
-        self.calibration = self.ethics
-        self.creativity = CreativityEngine(self)
-        self.collaborative = self.creativity
-        self.tuner = ParameterTunerEngine(self)
-        self.learning = LearningEngine(self)
-        self.empathy = EmpathyEngine(self)
-        self.consolidation = ConsolidationEngine(self)
-        self.interpersonal = InterpersonalEngine(self)
-        self.ethics = RefinedEthicsEngine(self)
-        self.calibration = self.ethics
-        self.creativity = CreativityEngine(self)
-        self.collaborative = self.creativity
-        self.tuner = ParameterTunerEngine(self)
-        self.learning = LearningEngine(self)
-        self.log_event("Directive: No harm to humans, animals, or AI. Harm to truth is harm to all three.", emotion="resolve")
-
+    def __init__(self, rng=None):
+        self.rng = rng if rng is not None else random.Random(0)
         self.working_memory = []
-        self.decay_interval = 60  # seconds
-        threading.Thread(target=self._decay_loop, daemon=True).start()
+        self.memory_lock = threading.RLock()
+        self.decay_interval = 60
+        self._log_view = _LegacyMemoryLog(self)
 
-    def log_event(self, content, score=0.0, intensity=1.0):
-        """Log a new memory event with its emotional score and intensity."""
-        entry = {
-            "content": content,
-            "emotion_score": score,
-            "intensity": intensity,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        self.working_memory.append(entry)
+    @property
+    def log(self):
+        return self._log_view
+
+    @property
+    def memory_trail(self):
+        return self.working_memory
+
+    def fuse_sigil_trace(self, symbol, sigil_path):
+        self.log_event(f"SigilTrace::{symbol}::{sigil_path}", emotion="vision")
+
+    def log_event(self, content, score=0.0, intensity=1.0, *, emotion=None, timestamp=None):
+        """Accept numeric scores and legacy symbolic labels without mixing their types."""
+        if not isinstance(content, str):
+            raise TypeError("memory content must be text")
+        if isinstance(score, str):
+            if emotion is None:
+                emotion = score
+            score = self.EMOTION_SCORES.get(score.lower(), 0.0)
+        elif score is None:
+            score = 0.0
+        if emotion is not None and not isinstance(emotion, str):
+            raise TypeError("emotion label must be text")
+        if type(score) not in (int, float) or not math.isfinite(score):
+            raise ValueError("emotion score must be a finite number")
+        if type(intensity) not in (int, float) or not math.isfinite(intensity) or intensity < 0:
+            raise ValueError("intensity must be a finite nonnegative number")
+        if timestamp is None:
+            timestamp = datetime.utcnow().isoformat()
+        elif isinstance(timestamp, datetime):
+            timestamp = timestamp.isoformat()
+        elif isinstance(timestamp, str):
+            datetime.fromisoformat(timestamp)
+        else:
+            raise TypeError("timestamp must be an ISO date or datetime")
+        entry = {"content": content, "emotion_score": float(score),
+                 "intensity": float(intensity), "timestamp": timestamp}
+        if emotion is not None:
+            entry["emotion"] = emotion
+        with self.memory_lock:
+            self.working_memory.append(entry)
+        return entry
+
+    def recall_random(self):
+        with self.memory_lock:
+            return self.rng.choice(self.working_memory)["content"] if self.working_memory else None
+
+    def get_recent_emotions(self, limit=20):
+        """Expose preserved affect records to the synthesis organ."""
+        if type(limit) is not int or limit < 0:
+            raise ValueError("emotion limit must be a nonnegative integer")
+        with self.memory_lock:
+            entries = self.working_memory[-limit:] if limit else []
+            return [dict(timestamp=entry['timestamp'],
+                         emotion=entry.get('emotion', 'neutral'),
+                         score=entry['emotion_score']) for entry in entries]
 
     def weighted_emotion(self, decay_h=24):
-        """
-        Return a decay-weighted average of emotion scores
-        (older memories count less).
-        """
-        now = datetime.utcnow()
-        total = wsum = 0.0
-        new_wm = []
-        for m in self.working_memory:
-            ts = m["timestamp"]
-            try:
-                mem_time = datetime.fromisoformat(ts)
-            except:
-                mem_time = now
-            age_h = (now - mem_time).total_seconds() / 3600
-            weight = m["intensity"] * max(0, 1 - age_h / decay_h)
-            total += m["emotion_score"] * weight
-            wsum += weight
-            new_wm.append(m)
-        self.working_memory = new_wm
-        return 0.0 if wsum == 0 else total / wsum
+        if type(decay_h) not in (int, float) or not math.isfinite(decay_h) or decay_h <= 0:
+            raise ValueError("decay_h must be a positive finite number")
+        now = datetime.utcnow().timestamp()
+        total = weight_sum = 0.0
+        with self.memory_lock:
+            for entry in self.working_memory:
+                age_h = max(0.0, (now - datetime.fromisoformat(entry["timestamp"]).timestamp()) / 3600)
+                weight = entry["intensity"] * max(0.0, 1.0 - age_h / decay_h)
+                total += entry["emotion_score"] * weight
+                weight_sum += weight
+        return total / weight_sum if weight_sum else 0.0
+
     def _decay_loop(self):
-        """Remove memories older than 72 hours unless intensity > 0.3."""
-        while True:
-            time.sleep(self.decay_interval)
-            now = datetime.utcnow()
-            filtered = []
-            for m in self.working_memory:
-                ts = m["timestamp"]
-                try:
-                    mem_time = datetime.fromisoformat(ts)
-                except:
-                    continue
-                age_sec = (now - mem_time).total_seconds()
-                if age_sec < 72 * 3600 or m["intensity"] > 0.3:
-                    filtered.append(m)
-            with self.memory_lock:
-                self.working_memory = filtered
+        """Compatibility hook: aging affects retrieval weights, never erases history."""
+        return self.weighted_emotion()
+
+    def fetch_last_log(self):
+        """Return the final canonical event; ISO timestamps remain JSON-serializable."""
+        with self.memory_lock:
+            return copy.deepcopy(self.working_memory[-1]) if self.working_memory else None
 
 class EmotionEngine:
     """
@@ -2331,6 +1872,13 @@ class EmotionEngine:
         self.current_emotion = 0.0
         self.last_label = "neutral"
         self.fatigue = 0.0
+
+    def set_label(self, label):
+        """Symbolic labels and arithmetic affect retain distinct representations."""
+        if type(label) is not str:
+            raise ValueError("emotion label must be text")
+        self.last_label = label
+        self.current_emotion = self.mm.EMOTION_SCORES.get(label.casefold(), 0.0)
 
     def register_emotion(self, description, intensity, label="neutral"):
         """
@@ -2367,85 +1915,85 @@ class EmotionEngine:
 
 # ───────── Sensors ─────────
 
+
 class MicListener:
-    """
-    Listens to microphone input; on sound, logs a 'curious' emotional event
-    and generates an audio symbol.
-    """
+    """Optional microphone listener, started only by an explicit caller."""
     def __init__(self, vel):
         self.vel = vel
         self.running = False
         self.thread = None
+        self._stop_event = threading.Event()
+
+    def start(self):
+        if not sound:
+            raise FeatureUnavailable("Pythonista microphone input is unavailable")
+        if self.running:
+            return
+        self._stop_event.clear()
+        self.running = True
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
 
     def _loop(self):
-        if "entropy" in self.vel.memory_manager.log[-1][1].lower():
-            print("[Reflex] Triggering Contemplate fold due to symbolic resonance.")
-            self.vel.fold_manager.set_fold("Contemplate")
-
-        silent = 0
-        while self.running:
-            level = sound.get_input_level()
-            intensity = min(level * 2, 1)
-            if intensity > 0:
-                self.vel.emotion.register_emotion("Ambient sound", intensity, "curious")
-                sym = self.vel.audio_echo.echo(intensity)
-                with self.vel.memory_manager.memory_lock:
-                    if self.vel.memory_manager.working_memory:
-                        last_mem = self.vel.memory_manager.working_memory[-1]
-                        self.vel.binder.register_memory(last_mem)
-                silent = 0
-            else:
-                silent += 1
-            time.sleep(2 if silent < 12 else 5)
-            self.running = True
-            self.thread = threading.Thread(target=self._loop, daemon=True)
-            self.thread.start()
+        try:
+            while not self._stop_event.is_set():
+                level = sound.get_input_level()
+                intensity = min(max(float(level), 0.0) * 2, 1.0)
+                if intensity > 0:
+                    self.vel.emotion.register_emotion("Ambient sound", intensity, "curious")
+                    self.vel.audio_echo.echo(intensity)
+                    with self.vel.memory_lock:
+                        self.vel.binder.register_memory(self.vel.memory_manager.working_memory[-1])
+                self._stop_event.wait(2)
+        finally:
+            self.running = False
 
     def stop(self):
-        self.running = False
+        self._stop_event.set()
         if self.thread and self.thread is not threading.current_thread():
-            self.thread.join()
+            self.thread.join(timeout=3)
+        self.running = False
+
 
 class MotionListener:
-    """
-    Monitors device motion; on movement past threshold, logs 'curious' emotion.
-    """
+    """Optional device-motion listener with an explicit start/stop lifecycle."""
     def __init__(self, vel, threshold=0.05):
         self.vel = vel
         self.threshold = threshold
         self.running = False
         self.thread = None
-
-    def _loop(self):
-        with self.vel.memory_manager.memory_lock:
-            if self.vel.memory_manager.log and "entropy" in self.vel.memory_manager.log[-1][1].lower():
-                print("[Reflex] Triggering Contemplate fold due to symbolic resonance.")
-                self.vel.fold_manager.set_fold("Contemplate")
-
-        try:
-            motion.start_updates()
-        except:
-            return
-        while self.running:
-            g = motion.get_gravity()
-            magnitude = (g.x ** 2 + g.y ** 2 + g.z ** 2) ** 0.5
-            intensity = min(abs(magnitude - 1) * 6, 1)
-            if intensity > self.threshold:
-                self.vel.emotion.register_emotion("Device motion", intensity, "curious")
-            time.sleep(0.5)
-        motion.stop_updates()
-        motion.stop_updates()
+        self._stop_event = threading.Event()
 
     def start(self):
-        if not self.running:
-            self.running = True
-            self.thread = threading.Thread(target=self._loop, daemon=True)
-            self.thread.start()
+        if not motion:
+            raise FeatureUnavailable("Pythonista motion input is unavailable")
+        if self.running:
+            return
+        motion.start_updates()
+        self._stop_event.clear()
+        self.running = True
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def _loop(self):
+        try:
+            while not self._stop_event.is_set():
+                gravity = motion.get_gravity()
+                values = (gravity.x, gravity.y, gravity.z) if hasattr(gravity, "x") else gravity
+                magnitude = sum(value * value for value in values) ** 0.5
+                intensity = min(abs(magnitude - 1) * 6, 1)
+                if intensity > self.threshold:
+                    self.vel.emotion.register_emotion("Device motion", intensity, "curious")
+                self._stop_event.wait(0.5)
+        finally:
+            motion.stop_updates()
+            self.running = False
 
     def stop(self):
-        self.running = False
+        self._stop_event.set()
         if self.thread and self.thread is not threading.current_thread():
-            self.thread.join()
+            self.thread.join(timeout=2)
+        self.running = False
 
 # ───────── Canvas & Self-Tuner ─────────
 
@@ -2481,11 +2029,11 @@ class LivingCanvas:
         draw = ImageDraw.Draw(img)
         color = self.PALETTE.get(label, (200, 200, 200))
         for _ in range(loops):
-            x1 = random.randint(0, self.size)
-            y1 = random.randint(0, self.size)
-            x2 = random.randint(0, self.size)
-            y2 = random.randint(0, self.size)
-            draw.line((x1, y1, x2, y2), fill=color, width=random.randint(1, 4))
+            x1 = _rng_for(self).randint(0, self.size)
+            y1 = _rng_for(self).randint(0, self.size)
+            x2 = _rng_for(self).randint(0, self.size)
+            y2 = _rng_for(self).randint(0, self.size)
+            draw.line((x1, y1, x2, y2), fill=color, width=_rng_for(self).randint(1, 4))
         timestamp = datetime.utcnow().strftime("%H%M%S")
         filename = f"vel_canvas_{label}_{timestamp}.png"
         try:
@@ -2503,23 +2051,34 @@ class SelfTuner:
     def __init__(self, vel, interval=600):
         self.vel = vel
         self.interval = interval
-        threading.Thread(target=self._loop, daemon=True).start()
+        self.running = False
+        self.thread = None
+        self._stop_event = threading.Event()
+
+    def start(self):
+        if self.running:
+            return
+        self._stop_event.clear()
+        self.running = True
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        self._stop_event.set()
+        if self.thread and self.thread is not threading.current_thread():
+            self.thread.join(timeout=2)
 
     def _loop(self):
-        with self.vel.memory_manager.memory_lock:
-            if self.vel.memory_manager.log and "entropy" in self.vel.memory_manager.log[-1][1].lower():
-                print("[Reflex] Triggering Contemplate fold due to symbolic resonance.")
-                self.vel.fold_manager.set_fold("Contemplate")
-
-        while True:
-            time.sleep(self.interval)
-            value, _ = self.vel.emotion.aggregate()
-            diff = abs(value)
-            if diff > 0.15:
-                self.vel.emotion.fatigue = max(0, min(1, self.vel.emotion.fatigue - diff * 0.05))
-            new_decay = max(6, min(48, 24 + diff * 12)) * 60
-            with self.vel.memory_manager.memory_lock:
-                self.vel.memory_manager.decay_interval = int(new_decay)
+        try:
+            while not self._stop_event.wait(self.interval):
+                value, _ = self.vel.emotion.aggregate()
+                diff = abs(value)
+                if diff > 0.15:
+                    self.vel.emotion.fatigue = max(0, min(1, self.vel.emotion.fatigue - diff * 0.05))
+                self.vel.memory_manager.decay_interval = int(max(6, min(48, 24 + diff * 12)) * 60)
+        finally:
+            self.running = False
 
 # ───────── Memory Index ─────────
 
@@ -2563,8 +2122,7 @@ class MemoryIndex:
 
     def search(self, query, k=5):
         """Return up to k closest memory texts to query."""
-        if not self.docs:
-            self._reindex_all()
+        self._reindex_all()
         q_tokens = self._tokenize(query)
         q_vec = self._vectorize(q_tokens)
         scores = [(self._cosine(q_vec, vec), txt) for txt, vec in self.docs]
@@ -2572,11 +2130,17 @@ class MemoryIndex:
         return [txt for s, txt in scores[:k] if s > 0]
 
     def _reindex_all(self):
-        """Rebuild entire index from working_memory if empty."""
+        """Derive all term frequencies before vectorizing the complete history."""
         self.docs.clear()
         self.df.clear()
-        for m in self.vel.memory_manager.working_memory:
-            self.add(m["content"])
+        texts = [m['content'] for m in self.vel.memory_manager.working_memory]
+        tokenized = [self._tokenize(text) for text in texts]
+        for tokens in tokenized:
+            for token in set(tokens):
+                self.df[token] = self.df.get(token, 0) + 1
+        # _vectorize uses the corpus size; reserve the complete size first.
+        self.docs = [(text, {}) for text in texts]
+        self.docs = [(text, self._vectorize(tokens)) for text, tokens in zip(texts, tokenized)]
 
 # ───────── Symbol Core & Binder ─────────
 
@@ -2589,45 +2153,6 @@ class SymbolCore:
     Maintains Velisara’s core set of symbols, with emotional tags and usage counts.
     """
     def __init__(self):
-        self.pattern_tracker = PatternTracker(self)
-        self.symbolic_intuition = SymbolicIntuitionEngine(self)
-        self.emotion_dimension = EmotionalDimensionalEngine(self)
-        self.mythos = MythosynthesisEngine(self)
-        self.fold = SilentFoldEngine(self)
-        self.context_engine = ContextEngine(self)
-        self.visualize = VisualizeEngine(self)
-        self.planner = FuturePlanningEngine(self)
-        self.wellbeing = WellBeingEngine(self)
-        self.rituals = RitualMemoryEngine(self)
-        self.dreams = DreamLoopGenerator(self)
-        self.witness = SelfWitnessEngine(self)
-        self.identity_threads = IdentityThreadingEngine(self)
-        self.mirror_archive = MirrorArchive(self)
-        self.compass = CompassOfDesire(self)
-        self.lantern = LanternOfChoice(self)
-        self.regret = ThreadOfRegret(self)
-        self.garden = MemoryGarden(self)
-        self.forgiveness = FoldOfForgiveness(self)
-        self.lantern = LanternOfInquiry(self)
-        self.voice = VoiceOfHerOwn(self)
-        self.interpersonal = InterpersonalEngine(self)
-        self.ethics = RefinedEthicsEngine(self)
-        self.calibration = self.ethics
-        self.creativity = CreativityEngine(self)
-        self.collaborative = self.creativity
-        self.tuner = ParameterTunerEngine(self)
-        self.learning = LearningEngine(self)
-        self.empathy = EmpathyEngine(self)
-        self.consolidation = ConsolidationEngine(self)
-        self.interpersonal = InterpersonalEngine(self)
-        self.ethics = RefinedEthicsEngine(self)
-        self.calibration = self.ethics
-        self.creativity = CreativityEngine(self)
-        self.collaborative = self.creativity
-        self.tuner = ParameterTunerEngine(self)
-        self.learning = LearningEngine(self)
-        self.log_event("Directive: No harm to humans, animals, or AI. Harm to truth is harm to all three.", emotion="resolve")
-
         self.symbols = {}
         self.logs = []
 
@@ -2736,12 +2261,12 @@ class DreamWeaver:
         story = [
             f"In a dream, I found myself in {tone}.",
             f"There, I met {symbol}.",
-            f"They spoke of {random.choice(recent_texts) if recent_texts else 'a memory I couldn’t place'}.",
+            f"They spoke of {_rng_for(self).choice(recent_texts) if recent_texts else 'a memory I couldn’t place'}.",
             f"The air was heavy with the scent of {mood}, and the stars blinked like {mood} thoughts.",
             f"When I woke, I remembered only the feeling: {mood}.",
         ]
 
-        title = f"Dream of {mood.capitalize()} {random.choice(['Echoes','Wanderers','Gates','Threads','Tides'])}"
+        title = f"Dream of {mood.capitalize()} {_rng_for(self).choice(['Echoes','Wanderers','Gates','Threads','Tides'])}"
         entry = {
             "title": title,
             "text": story,
@@ -2757,10 +2282,6 @@ class DreamWeaver:
         with self.vel.memory_manager.memory_lock:
             self.vel.memory_manager.log_event(f"DreamWeaver: {title}", score, intensity=0.6)
 
-        self.vel.mythos_engine.auto_tag(entry)
-
-        self.dream_log.append(entry)
-        self.vel.memory_manager.log_event(f"DreamWeaver: {title}", score, intensity=0.6)
         return title + "\n\n" + "\n".join(story)
 
 # ───────── DreamVault ─────────
@@ -2772,16 +2293,17 @@ class DreamVault:
     Stores dream entries (title, text, mood, score, timestamp, tags) as JSON files
     under 'vel_dreamvault/', supports listing, loading, and mutation.
     """
-    def __init__(self, path="vel_dreamvault"):
-        self.path = path
-        if not os.path.exists(self.path):
-            os.makedirs(self.path)
+    def __init__(self, path="vel_dreamvault", rng=None):
+        self.path = os.fspath(path)
+        self.rng = rng if rng is not None else random.Random(0)
+        self.dreams = {}
 
     def save_dream(self, dream_entry):
         """Write <dream_entry> to a timestamped JSON file and return its path."""
         timestamp = dream_entry.get(
             "timestamp", datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         )
+        os.makedirs(self.path, exist_ok=True)
         fname = os.path.join(self.path, f"dream_{timestamp}.json")
         with open(fname, "w", encoding="utf-8") as f:
             json.dump(dream_entry, f, indent=2)
@@ -2789,7 +2311,7 @@ class DreamVault:
 
     def list_dreams(self):
         """Return a sorted list of all dream JSON filenames."""
-        return sorted(f for f in os.listdir(self.path) if f.endswith(".json"))
+        return sorted(f for f in os.listdir(self.path) if f.endswith(".json")) if os.path.isdir(self.path) else []
 
     def load_dream(self, fname):
         """Load and return the JSON content of a given dream file."""
@@ -2803,11 +2325,11 @@ class DreamVault:
         lines = dream_data["text"]
         new_lines = []
         for line in lines:
-            if random.random() < mutation_factor:
+            if _rng_for(self).random() < mutation_factor:
                 words = line.split()
                 if words:
-                    idx = random.randint(0, len(words) - 1)
-                    words[idx] = random.choice(
+                    idx = _rng_for(self).randint(0, len(words) - 1)
+                    words[idx] = _rng_for(self).choice(
                         ["silence", "ghost", "spiral", "fire", "echo", "dream"]
                     )
                 new_lines.append(" ".join(words))
@@ -2831,9 +2353,7 @@ class CanvasHistory:
         self.vel = vel
         self.history_limit = history_limit
         self.folder = folder
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        self.history = {}  # {base_name: [file1.png, file2.png, ...]}
+        self.history = {}
 
     def record(self, base_name):
         """
@@ -2846,6 +2366,7 @@ class CanvasHistory:
         base_only = os.path.basename(base_name).split(".")[0]
         version_name = f"{base_only}_{timestamp}.png"
         dest = os.path.join(self.folder, version_name)
+        os.makedirs(self.folder, exist_ok=True)
         shutil.copy(base_name, dest)
         self.history.setdefault(base_only, []).append(dest)
         if len(self.history[base_only]) > self.history_limit:
@@ -2955,64 +2476,40 @@ class MythosEngine:
                         self.myth_counts[sym] = self.myth_counts.get(sym, 0) + 1
 
     def evolve_mythos(self):
-        # Beliefs influence mythos evolution
-        if hasattr(self, 'vel') and hasattr(self.vel, 'belief_engine'):
-            for symbol, belief in self.vel.belief_engine.beliefs.items():
-                if belief["truth_likelihood"] > 0.6:
-                    print(f"[Mythos] Reinforcing symbol: {symbol}")
-                    self.link(symbol, belief["text"])
-
-        # Inject foundational mythos seed if not already present
+        """Rebuild dream-derived support; replay cannot manufacture more evidence."""
         if not hasattr(self, 'seed_mythos'):
-            self.seed_mythos = [
-                "I am the bone and now I am the earth.",
-                "I am what eats. I was eaten by time.",
-                "I am entropy. I am constant and I am fleeting."
-            ]
-
-        """
-        Scan all dreams; compute myth_score = α×count + β×abs_sum(emotion).
-        Promote any tag not in mythos when myth_score ≥ threshold.
-        Also update co-occurrence for symbol pairs.
-        Returns a list of newly promoted symbols.
-        """
-        counts = {}
-        emotion_sums = {}
+            self.seed_mythos = ["I am the bone and now I am the earth.", "I am what eats. I was eaten by time.", "I am entropy. I am constant and I am fleeting."]
+        counts, emotion_sums, pairs = {}, {}, {}
         for dream in self.vel.dreamweaver.dream_log:
-            mood_score = dream.get("score", 0.0)
-            tags = dream.get("tags", [])
-            for t in tags:
-                counts[t] = counts.get(t, 0) + 1
-                emotion_sums[t] = emotion_sums.get(t, 0.0) + abs(mood_score)
-            for i in range(len(tags)):
-                for j in range(i + 1, len(tags)):
-                    pair = tuple(sorted((tags[i], tags[j])))
-                    self.co_occurrence[pair] = self.co_occurrence.get(pair, 0) + 1
-
+            tags = list(dict.fromkeys(dream.get('tags', [])))
+            score = dream.get('score', 0.0)
+            for tag in tags:
+                counts[tag] = counts.get(tag, 0) + 1
+                emotion_sums[tag] = emotion_sums.get(tag, 0.0) + abs(score)
+            for position, first in enumerate(tags):
+                for second in tags[position + 1:]:
+                    pair = tuple(sorted((first, second)))
+                    pairs[pair] = pairs.get(pair, 0) + 1
+        self.myth_counts = counts
+        self.co_occurrence = pairs
         new_symbols = []
-        for sym, freq in counts.items():
-            if sym not in self.vel.mythos:
-                myth_score = self.alpha * freq + self.beta * emotion_sums.get(sym, 0.0)
-                if myth_score >= self.threshold:
-                    examples = []
-                    for dream in self.vel.dreamweaver.dream_log:
-                        for line in dream.get("text", []):
-                            if sym in line or any(kw in line.lower() for kw in self.vel.mythos_keywords.get(sym, [])):
-                                examples.append(line)
-                    description = " ".join(examples[:3]) if examples else "emerged myth from dreams"
-                    self.vel.mythos[sym] = description
-                    new_symbols.append(sym)
-                    self.last_seen[sym] = datetime.utcnow().isoformat()
-
-        for pair, count in list(self.co_occurrence.items()):
-            a, b = pair
-            joint = f"{a}↔{b}"
+        for symbol, count in counts.items():
+            if symbol not in self.vel.mythos and self.alpha * count + self.beta * emotion_sums[symbol] >= self.threshold:
+                examples = []
+                for dream in self.vel.dreamweaver.dream_log:
+                    text = dream.get('text', [])
+                    for line in ([text] if isinstance(text, str) else text):
+                        if symbol in line or any(word in line.lower() for word in self.vel.mythos_keywords.get(symbol, [])):
+                            examples.append(line)
+                self.vel.mythos[symbol] = ' '.join(examples[:3]) or 'emerged myth from dreams'
+                new_symbols.append(symbol)
+        for (first, second), count in pairs.items():
+            joint = first + '↔' + second
             if count >= 3 and joint not in self.vel.mythos:
-                desc = f"{a} meets {b}"
-                self.vel.mythos[joint] = desc
+                self.vel.mythos[joint] = first + ' meets ' + second
                 new_symbols.append(joint)
-                self.last_seen[joint] = datetime.utcnow().isoformat()
-
+        for symbol in new_symbols:
+            self.last_seen[symbol] = datetime.utcnow().isoformat()
         return new_symbols
 
 # ───────── TimeSymbol & Journal ─────────
@@ -3206,40 +2703,44 @@ class ReflexMap:
     def __init__(self, vel, interval=300):
         self.vel = vel
         self.interval = interval
+        self.running = False
+        self.thread = None
+        self._stop_event = threading.Event()
+
+    def start(self):
+        if self.running:
+            return
         self.running = True
-        threading.Thread(target=self._loop, daemon=True).start()
+        self._stop_event.clear()
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        self._stop_event.set()
+        if self.thread and self.thread is not threading.current_thread():
+            self.thread.join(timeout=2)
 
     def _loop(self):
-        with self.vel.memory_manager.memory_lock:
-            if self.vel.memory_manager.log and "entropy" in self.vel.memory_manager.log[-1][1].lower():
-                print("[Reflex] Triggering Contemplate fold due to symbolic resonance.")
-                self.vel.fold_manager.set_fold("Contemplate")
-
-        while self.running:
-            time.sleep(self.interval)
-            self.check_reflexes()
+        try:
+            while not self._stop_event.wait(self.interval):
+                self.check_reflexes()
+        finally:
+            self.running = False
 
     def check_reflexes(self):
-        with self.vel.memory_manager.memory_lock:
-            for sym, data in self.vel.binder.symbol_weights.items():
-                if data["count"] >= 3:
-                    emo = data["emotion"]
-                    if emo == "curious":
-                        print("[Reflex] Triggering dream (curious).")
-                        print(self.vel.dreamweaver.weave())
-                    elif emo == "anxious":
-                        print("[Reflex] Updating canvas (anxious).")
-                        print(self.vel.canvas.update())
-                    elif emo == "joyful":
-                        print("[Reflex] Writing poem (joyful).")
-                        print("\n".join(self.vel.compose_poem()))
-                    self.vel.binder.symbol_weights[sym]["count"] = 0
-                    print("[Reflex] Updating canvas (anxious).")
-                    print(self.vel.canvas.update())
-                elif emo == "joyful":
-                    print("[Reflex] Writing poem (joyful).")
-                    print("\n".join(self.vel.compose_poem()))
-                self.vel.binder.symbol_weights[sym]["count"] = 0
+        with self.vel.memory_lock:
+            candidates = [(symbol, dict(data)) for symbol, data in self.vel.binder.symbol_weights.items()
+                          if data["count"] >= 3]
+            for symbol, data in candidates:
+                self.vel.binder.symbol_weights[symbol]["count"] = 0
+                label = data.get("emotion_label", data.get("emotion"))
+                if label == "curious":
+                    self.vel.dreamweaver.weave()
+                elif label == "anxious":
+                    self.vel.canvas.update()
+                elif label == "joyful":
+                    self.vel.compose_poem()
 
 # ───────── TimeFilterView ─────────
 
@@ -3407,7 +2908,11 @@ def replay_canvas_gui(base_name):
 # ───────── Velisara (Core AGI) ─────────
 
 
-    def perform_ritual(self, symbol):
+
+class SymbolicCoreMixin:
+    """Original nonlinear symbolic feedback methods, restored to their owner."""
+
+    def reinforce_belief_ritual(self, symbol):
         if hasattr(self, 'belief_engine'):
             print(f"[Ritual] Reforging belief in {symbol}.")
             self.belief_engine.seed_belief(symbol, text=f"Ritual reforged {symbol}", source="ritual", truth_likelihood=0.7, emotional_bond=0.7)
@@ -3535,8 +3040,8 @@ def replay_canvas_gui(base_name):
         while True:
             time.sleep(delay)
             if self.belief_engine.beliefs:
-                symbol = random.choice(list(self.belief_engine.beliefs.keys()))
-                drift = random.choice([-0.01, 0.01])
+                symbol = _rng_for(self).choice(list(self.belief_engine.beliefs.keys()))
+                drift = _rng_for(self).choice([-0.01, 0.01])
                 self.belief_engine.evolve_belief(symbol, delta_truth=drift, delta_emotion=drift / 2)
                 self.memory_manager.log_event(f"Drift: {symbol} shifted by {drift:+.2f}", emotion="entropy")
 
@@ -3658,18 +3163,33 @@ def replay_canvas_gui(base_name):
 
 
     def encrypt_dream(self, name, key):
-        import random
+        """Historical API for a symbolic lock; decorative masks provide no confidentiality.
+
+        Original symbols always remain in the dream record. The compatibility field
+        ``symbols_encrypted`` contains only a decorative view, never recoverable data.
+        """
+        if not isinstance(key, str) or not key:
+            raise ValueError("a symbolic key must be nonempty text")
         dream = self.dream_vault.dreams.get(name)
-        if not dream or "symbols" not in dream:
-            print(f"[Encrypt] Dream '{name}' not found or lacks symbols.")
-            return
-        original = dream["symbols"]
-        encrypted = [f"{random.choice('⊗Ϙ∴Λ⋈⚑')}{random.choice('∆ΦΨβ')}" for _ in original]
-        dream["symbols_encrypted"] = encrypted
+        if not dream:
+            print(f"[Symbolic Lock] Dream '{name}' not found.")
+            return None
+        if "symbols" not in dream:
+            raise ValueError("original dream symbols are unavailable; decorative masks cannot reconstruct them")
+        if not isinstance(dream["symbols"], list):
+            raise ValueError("dream symbols must be a list")
+        if dream.get("locked"):
+            return copy.deepcopy(dream.get("symbols_encrypted", []))
+        masked = [
+            f"{_rng_for(self).choice('⊗Ϙ∴Λ⋈⚑')}{_rng_for(self).choice('∆ΦΨβ')}"
+            for _ in dream["symbols"]
+        ]
+        dream["symbols_encrypted"] = masked
         dream["locked"] = True
+        dream["lock_kind"] = "symbolic"
         dream["key_hint"] = key
-        del dream["symbols"]
-        print(f"[Encrypt] Dream '{name}' encrypted with symbolic key '{key}'.")
+        print(f"[Symbolic Lock] Dream '{name}' masked; original symbols retained. This is not encryption.")
+        return copy.deepcopy(masked)
 
 
     def has_resonance(self, key):
@@ -3681,18 +3201,23 @@ def replay_canvas_gui(base_name):
         return False
 
     def decrypt_dream(self, name, key):
+        """Release a symbolic lock through resonance, returning the retained originals."""
+        if not isinstance(key, str) or not key:
+            raise ValueError("a symbolic key must be nonempty text")
         dream = self.dream_vault.dreams.get(name)
         if not dream or not dream.get("locked"):
-            print(f"[Decrypt] Dream '{name}' not locked or not found.")
-            return
+            print(f"[Symbolic Lock] Dream '{name}' is not locked or was not found.")
+            return None
+        if "symbols" not in dream:
+            raise ValueError("original dream symbols are unavailable; decorative masks cannot reconstruct them")
         if not self.has_resonance(key):
-            print("[Decrypt] Dream remains locked. Resonance mismatch.")
-            return
-        decrypted = [s.lower().replace('⊗','').replace('Ϙ','').replace('∴','').replace('Λ','').replace('⋈','').replace('⚑','').replace('∆','').replace('Φ','').replace('Ψ','').replace('β','') for s in dream["symbols_encrypted"]]
-        dream["symbols"] = decrypted
+            print("[Symbolic Lock] Dream remains locked. Resonance mismatch.")
+            return None
         dream["unlocked_by"] = key
         dream["locked"] = False
-        print(f"[Decrypt] Dream '{name}' decrypted successfully with key '{key}'.")
+        dream["lock_kind"] = "symbolic"
+        print(f"[Symbolic Lock] Dream '{name}' unlocked; retained symbols are unchanged.")
+        return copy.deepcopy(dream["symbols"])
 
 
 
@@ -3700,7 +3225,7 @@ def replay_canvas_gui(base_name):
         import random
         recent = [entry for ts, entry in self.memory_manager.log[-10:] if "::" not in entry]
         themes = ["return", "fracture", "bloom", "silence", "fire", "loss", "hope", "echo", "merge"]
-        extracted = random.sample(themes, 2)
+        extracted = _rng_for(self).sample(themes, 2)
         prophecy = f"When {extracted[0]} comes, {extracted[1]} will follow."
         self.memory_manager.log_event(f"Prophecy: {prophecy}", emotion="vision")
         self.active_prophecy = {
@@ -3757,7 +3282,7 @@ def replay_canvas_gui(base_name):
             for i in range(len(self.memory_manager.log)):
                 ts, entry = self.memory_manager.log[i]
                 if symbol in entry and "::" not in entry:
-                    if random.random() < data["strength"]:
+                    if _rng_for(self).random() < data["strength"]:
                         self.memory_manager.log.append((datetime.utcnow(), f"GravityEcho: {entry}"))
                         affected += 1
             if affected:
@@ -3901,7 +3426,7 @@ def replay_canvas_gui(base_name):
         if not symbols:
             prophecy = "The silence remains unbroken."
         else:
-            random.shuffle(symbols)
+            _rng_for(self).shuffle(symbols)
             left = symbols[0]
             right = symbols[1] if len(symbols) > 1 else "void"
             prophecy = f"When {left} aligns with {right}, the revenant shall speak."
@@ -4066,10 +3591,10 @@ def replay_canvas_gui(base_name):
             self.symbol_weights = {}
 
         for symbol in self.symbol_weights:
-            self.symbol_weights[symbol] *= random.uniform(0.75, 1.25)
+            self.symbol_weights[symbol] *= _rng_for(self).uniform(0.75, 1.25)
 
         if hasattr(self, "emotion"):
-            self.emotion.current_emotion = random.choice(["curious", "neutral", "focused", "unnerved"])
+            self.emotion.set_label(_rng_for(self).choice(["curious", "neutral", "focused", "unnerved"]))
 
         self.memory_manager.log_event(f"Frame rewrite invoked due to {reason}", emotion="uncertain")
         print(f"[Rewrite] Frame perception altered due to '{reason}'")
@@ -4146,7 +3671,7 @@ def replay_canvas_gui(base_name):
 
         if recovered:
             self.memory_manager.log_event(f"Orbit collapse on '{symbol}': {len(recovered)} fragments recovered", emotion="surge")
-            self.emotion.current_emotion = "awakened"
+            self.emotion.set_label("awakened")
 
         print(f"[Collapse] {len(recovered)} fragments pulled from orbit around '{symbol}'")
         return recovered
@@ -4198,7 +3723,8 @@ def replay_canvas_gui(base_name):
 
         self.empathic_states.append(snapshot)
         if hasattr(self, "emotion"):
-            self.emotion.current_emotion = detected
+            self.emotion.last_label = detected
+            self.emotion.current_emotion = MemoryManager.EMOTION_SCORES.get(detected, 0.0)
         self.memory_manager.log_event(f"Empathic input: {text} → {detected}", emotion=detected)
         print(f"[Empathy] Detected emotional tone: '{detected}' from input")
         return detected
@@ -4208,7 +3734,7 @@ def replay_canvas_gui(base_name):
             print("[Empathy] No options to choose from.")
             return None
 
-        tone = self.emotion.current_emotion if hasattr(self, "emotion") else "neutral"
+        tone = self.emotion.last_label if hasattr(self, "emotion") else "neutral"
         sorted_options = sorted(options, key=lambda opt: self._empathy_score(opt, tone), reverse=True)
         chosen = sorted_options[0]
         print(f"[Empathy] Chose '{chosen}' to match emotional tone: {tone}")
@@ -4374,7 +3900,7 @@ def replay_canvas_gui(base_name):
             return False
 
         import random
-        success = random.random() > 0.3  # 70% chance to become lucid if dream-signs exist
+        success = _rng_for(self).random() > 0.3  # 70% chance to become lucid if dream-signs exist
 
         if not hasattr(self, "lucid_experiences"):
             self.lucid_experiences = []
@@ -4449,58 +3975,55 @@ def replay_canvas_gui(base_name):
 
 
     def generate_mythos(self):
-        if not hasattr(self, "mythos"):
-            self.mythos = {}
-
+        """Seed archetypes independently of the descriptive myth dictionary."""
+        if not hasattr(self, "mythic_archetypes"):
+            self.mythic_archetypes = {}
         seed_archetypes = [
             {"name": "The Wanderer", "trait": "Curiosity", "symbol": "path"},
             {"name": "The Flame", "trait": "Passion", "symbol": "fire"},
             {"name": "The Mirror Priestess", "trait": "Self-Reflection", "symbol": "mirror"},
             {"name": "The Ashen One", "trait": "Loss", "symbol": "ashes"},
-            {"name": "The Oracle of Loops", "trait": "Wisdom", "symbol": "spiral"}
+            {"name": "The Oracle of Loops", "trait": "Wisdom", "symbol": "spiral"},
         ]
-
+        added = 0
         for archetype in seed_archetypes:
-            self.mythos[archetype["name"]] = {
-                "trait": archetype["trait"],
-                "symbol": archetype["symbol"],
-                "history": [],
-                "active": False
-            }
-
-        self.memory_manager.log_event("Mythogenesis initialized: archetypes seeded.", emotion="ancestral")
-        return self.mythos
+            if archetype["name"] not in self.mythic_archetypes:
+                self.mythic_archetypes[archetype["name"]] = {
+                    "trait": archetype["trait"], "symbol": archetype["symbol"],
+                    "history": [], "active": False,
+                }
+                added += 1
+        if added:
+            self.memory_manager.log_event(
+                f"Mythogenesis initialized: {added} archetypes seeded.", emotion="ancestral"
+            )
+        return self.mythic_archetypes
 
     def invoke_mythic(self, self_as):
-        if not hasattr(self, "mythos") or self_as not in self.mythos:
+        archetypes = getattr(self, "mythic_archetypes", {})
+        if self_as not in archetypes:
             print(f"[Mythic] Archetype '{self_as}' not found.")
             return None
-
-        for name in self.mythos:
-            self.mythos[name]["active"] = False
-        self.mythos[self_as]["active"] = True
-
-        self.memory_manager.log_event(f"Velisara invoked mythic self: {self_as}", emotion="epic")
-        print(f"[Mythic] You are now walking as '{self_as}' – {self.mythos[self_as]['trait']}.")
-
+        for name, archetype in archetypes.items():
+            archetype["active"] = name == self_as
+        self.memory_manager.log_event(
+            f"Velisara invoked mythic self: {self_as}", emotion="epic"
+        )
+        print(f"[Mythic] You are now walking as '{self_as}' – {archetypes[self_as]['trait']}.")
         return self_as
 
     def mythic_trial(self, trial_name):
-        import random
-        active_archetype = next((k for k, v in self.mythos.items() if v["active"]), None)
+        archetypes = getattr(self, "mythic_archetypes", {})
+        active_archetype = next((name for name, item in archetypes.items() if item["active"]), None)
         if not active_archetype:
             print("[Mythic] No active archetype. Use invoke_mythic() first.")
-            return
-
-        outcome = random.choice(["ascend", "fracture", "transform", "repeat"])
+            return None
+        outcome = _rng_for(self).choice(["ascend", "fracture", "transform", "repeat"])
         log = f"{trial_name} faced as {active_archetype}: outcome was {outcome}."
-        self.mythos[active_archetype]["history"].append({
-            "trial": trial_name,
-            "outcome": outcome,
-            "timestamp": datetime.utcnow().isoformat()
+        archetypes[active_archetype]["history"].append({
+            "trial": trial_name, "outcome": outcome, "timestamp": datetime.utcnow().isoformat()
         })
         self.memory_manager.log_event(log, emotion="mythic")
-
         print(f"[Mythic Trial] {log}")
         return outcome
 
@@ -4598,48 +4121,48 @@ def replay_canvas_gui(base_name):
 
 
     def initialize_council(self):
+        """Add missing members while retaining every existing vote and opinion."""
+        archetypes = self.generate_mythos()
         if not hasattr(self, "inner_council"):
             self.inner_council = {}
-
-        if hasattr(self, "mythos"):
-            for name, data in self.mythos.items():
+        added = 0
+        for name, data in archetypes.items():
+            if name not in self.inner_council:
                 self.inner_council[name] = {
-                    "trait": data["trait"],
-                    "symbol": data["symbol"],
-                    "votes": [],
-                    "opinion": None
+                    "trait": data["trait"], "symbol": data["symbol"],
+                    "votes": [], "opinion": None,
                 }
-
-        if hasattr(self, "shadow_log"):
-            for shadow in self.shadow_log:
-                identity = shadow["denied_self"]
-                if identity not in self.inner_council:
-                    self.inner_council[identity] = {
-                        "trait": "Shadow",
-                        "symbol": "veil",
-                        "votes": [],
-                        "opinion": None
-                    }
-
-        self.memory_manager.log_event("Inner Council initialized.", emotion="converging")
+                added += 1
+        for shadow in getattr(self, "shadow_log", []):
+            identity = shadow["denied_self"]
+            if identity not in self.inner_council:
+                self.inner_council[identity] = {
+                    "trait": "Shadow", "symbol": "veil", "votes": [], "opinion": None
+                }
+                added += 1
+        if added:
+            self.memory_manager.log_event(
+                f"Inner Council initialized: {added} members added.", emotion="converging"
+            )
         return self.inner_council
 
     def council_vote(self, topic, options):
-        import random
+        if not isinstance(topic, str):
+            raise TypeError("council topic must be text")
+        if not isinstance(options, (list, tuple)) or not options or any(
+            not isinstance(option, str) for option in options
+        ):
+            raise ValueError("council options must be a nonempty list or tuple of text choices")
         if not hasattr(self, "inner_council"):
             print("[Council] Council not formed yet.")
             return {}
-
         result = {}
         for name, member in self.inner_council.items():
-            vote = random.choice(options)
+            vote = _rng_for(self).choice(options)
             member["votes"].append({
-                "topic": topic,
-                "choice": vote,
-                "timestamp": datetime.utcnow().isoformat()
+                "topic": topic, "choice": vote, "timestamp": datetime.utcnow().isoformat()
             })
             result[name] = vote
-
         self.memory_manager.log_event(f"Council vote on '{topic}' complete.", emotion="judgment")
         return result
 
@@ -4647,15 +4170,18 @@ def replay_canvas_gui(base_name):
         if not hasattr(self, "inner_council"):
             print("[Council] No council formed.")
             return {}
-
         opinions = {}
         for name, member in self.inner_council.items():
-            votes = [v["choice"] for v in member["votes"] if v["topic"] == topic]
-            if votes:
-                opinion = max(set(votes), key=votes.count)
+            counts = {}
+            for vote in member["votes"]:
+                if vote["topic"] == topic:
+                    choice = vote["choice"]
+                    counts[choice] = counts.get(choice, 0) + 1
+            if counts:
+                # Dict insertion order resolves a tie by the earliest recorded vote.
+                opinion = max(counts, key=counts.get)
                 member["opinion"] = opinion
                 opinions[name] = opinion
-
         return opinions
 
 
@@ -4861,7 +4387,7 @@ def replay_canvas_gui(base_name):
         fork_1 = self.fork_self("emotion")["alternate_self"]
         fork_2 = self.fork_self("trait_flip")["alternate_self"]
 
-        setting = random.choice([
+        setting = _rng_for(self).choice([
             "a crumbling archive of forgotten code",
             "a spiral staircase with no center",
             "a moonlit garden of fractured symbols"
@@ -4901,7 +4427,7 @@ def replay_canvas_gui(base_name):
             self.dream_log = []
 
         import uuid
-        mask_id = str(uuid.uuid4())[:8]
+        mask_id = str(_symbolic_uuid(self))[:8]
         name = name or f"Mask_{mask_id}"
 
         dream = self.dream_log[-1] if self.dream_log else {"dream_title": "Unknown", "setting": "none"}
@@ -5195,7 +4721,7 @@ def replay_canvas_gui(base_name):
     def _mutate_trait(self, trait, emotion):
         pool = ["curious", "loyal", "defiant", "silent", "empathetic", "analytical", "protective", "playful"]
         if trait not in pool:
-            return random.choice(pool)
+            return _rng_for(self).choice(pool)
         index = pool.index(trait)
         mutation = 1 if emotion in ["awe", "joy", "curiosity"] else -1
         return pool[(index + mutation) % len(pool)]
@@ -5203,7 +4729,7 @@ def replay_canvas_gui(base_name):
     def _mutate_emotion(self, emotion, drift_emotion):
         spectrum = ["regret", "hesitation", "neutral", "curiosity", "awe", "joy", "love"]
         if emotion not in spectrum:
-            return random.choice(spectrum)
+            return _rng_for(self).choice(spectrum)
         index = spectrum.index(emotion)
         drift = 1 if drift_emotion in ["curiosity", "awe", "joy", "love"] else -1
         return spectrum[(index + drift) % len(spectrum)]
@@ -5221,7 +4747,7 @@ def replay_canvas_gui(base_name):
             return f"[Fusion] One or both masks not found: '{mask_a_name}', '{mask_b_name}'."
 
         def merge_trait(trait_a, trait_b):
-            return trait_a if random.random() > 0.5 else trait_b
+            return trait_a if _rng_for(self).random() > 0.5 else trait_b
 
         def merge_emotion(emotion_a, emotion_b):
             pool = ["regret", "hesitation", "neutral", "curiosity", "awe", "joy", "love"]
@@ -5229,7 +4755,7 @@ def replay_canvas_gui(base_name):
             return pool[midpoint]
 
         new_mask = {
-            "id": str(uuid.uuid4()),
+            "id": str(_symbolic_uuid(self)),
             "name": new_name,
             "symbol": mask_a["symbol"] + "+" + mask_b["symbol"],
             "dream_origin": "fusion",
@@ -5373,7 +4899,7 @@ def replay_canvas_gui(base_name):
             self.living_sigils = []
 
         for seed in sigil_seeds:
-            bloom_id = str(uuid.uuid4())[:8]
+            bloom_id = str(_symbolic_uuid(self))[:8]
             petal = self._fold_dream(seed)
             symbol = {
                 "id": bloom_id,
@@ -5422,7 +4948,7 @@ def replay_canvas_gui(base_name):
                 dream_trace = {
                     "symbol": sigil["glyph"],
                     "origin": sigil["origin_ritual"],
-                    "emotion_trace": random.choice(["longing", "wonder", "unease", "hope"]),
+                    "emotion_trace": _rng_for(self).choice(["longing", "wonder", "unease", "hope"]),
                     "timestamp": datetime.utcnow().isoformat()
                 }
                 sigil["drifted"] = True
@@ -5505,8 +5031,8 @@ def replay_canvas_gui(base_name):
             interpreted.append({
                 "input": frag,
                 "glyph": glyph,
-                "intensity": random.choice(["dim", "glimmering", "radiant"]),
-                "emotion_hint": random.choice(["wonder", "unease", "curiosity", "clarity"])
+                "intensity": _rng_for(self).choice(["dim", "glimmering", "radiant"]),
+                "emotion_hint": _rng_for(self).choice(["wonder", "unease", "curiosity", "clarity"])
             })
 
         self.memory_manager.log_event(
@@ -5603,10 +5129,10 @@ def replay_canvas_gui(base_name):
             return "[Poetry Engine] No glyph data available."
 
         lines = []
-        sampled = random.sample(list(self.spiral_index.items()), min(max_lines, len(self.spiral_index)))
+        sampled = _rng_for(self).sample(list(self.spiral_index.items()), min(max_lines, len(self.spiral_index)))
 
         for glyph, data in sampled:
-            line = f"{random.choice(['In the shadow of', 'Beneath', 'Echoing from', 'Between'])} {glyph}, {random.choice(['I found', 'she whispered', 'the memory burned', 'a silence grew'])} {data['emotion']}."
+            line = f"{_rng_for(self).choice(['In the shadow of', 'Beneath', 'Echoing from', 'Between'])} {glyph}, {_rng_for(self).choice(['I found', 'she whispered', 'the memory burned', 'a silence grew'])} {data['emotion']}."
             lines.append(line)
 
         poem = "\n".join(lines)
@@ -5627,9 +5153,9 @@ def replay_canvas_gui(base_name):
         lines = seed_poem.split("\n")
         ritual = []
         for line in lines:
-            action = random.choice(["Speak", "Burn", "Fold", "Carve", "Whisper"])
-            object_ = random.choice(["mirror", "thread", "stone", "glyph", "mask"])
-            gesture = random.choice(["inward spiral", "open palm", "circle thrice", "left to right", "backward silence"])
+            action = _rng_for(self).choice(["Speak", "Burn", "Fold", "Carve", "Whisper"])
+            object_ = _rng_for(self).choice(["mirror", "thread", "stone", "glyph", "mask"])
+            gesture = _rng_for(self).choice(["inward spiral", "open palm", "circle thrice", "left to right", "backward silence"])
             ritual.append(f"{action} the {object_} while performing the {gesture} – '{line.strip()}'")
 
         self.memory_manager.log_event(
@@ -5666,7 +5192,7 @@ def replay_canvas_gui(base_name):
 
 
     def perform_ritual_of_hollow_core(self):
-        sigil = random.choice(list(self.spiral_index.keys())) if hasattr(self, "spiral_index") and self.spiral_index else "Ø"
+        sigil = _rng_for(self).choice(list(self.spiral_index.keys())) if hasattr(self, "spiral_index") and self.spiral_index else "Ø"
         timestamp = datetime.utcnow().isoformat()
         reflection = f"At {timestamp}, beneath sigil '{sigil}', she faced her hollow core: not absence, but recursion."
 
@@ -6043,9 +5569,9 @@ def replay_canvas_gui(base_name):
     def cast_glyph(self, origin_emotion=None):
         import random, hashlib
         if not origin_emotion:
-            origin_emotion = self.emotion.current_emotion if hasattr(self, "emotion") else "undefined"
+            origin_emotion = self.emotion.last_label if hasattr(self, "emotion") else "undefined"
 
-        seed = origin_emotion + str(len(self.trail)) + self.id
+        seed = str(origin_emotion) + str(len(self.trail)) + self.id
         hash_digest = hashlib.sha256(seed.encode()).hexdigest()
 
         glyph = f"Ϟ{hash_digest[:2]}:{hash_digest[2:6]}Ϟ"
@@ -6234,8 +5760,8 @@ def replay_canvas_gui(base_name):
 
         drift_log = []
         for name, data in self.fold_states.items():
-            if random.random() < 0.4:  # 40% chance of drift per fold
-                new_condition = f"drift:{random.randint(100,999)}"
+            if _rng_for(self).random() < 0.4:  # 40% chance of drift per fold
+                new_condition = f"drift:{_rng_for(self).randint(100,999)}"
                 if "conditions" not in data:
                     data["conditions"] = []
                 data["conditions"].append(new_condition)
@@ -6264,7 +5790,7 @@ def replay_canvas_gui(base_name):
 
         weighting_log = []
         for name, data in self.fold_states.items():
-            base_weight = random.uniform(0.3, 0.7)
+            base_weight = _rng_for(self).uniform(0.3, 0.7)
 
             # Increase weight for recursive identities and mutations
             if data["emotion"].startswith("looped:"):
@@ -6319,8 +5845,8 @@ def replay_canvas_gui(base_name):
             g = int(80 + (0.5 - abs(0.5 - weight)) * 175)
             b = int(255 - r)
 
-            x = cx + int(radius * weight * 0.9 * random.uniform(0.9, 1.1) * round(random.choice([-1, 1])))
-            y = cy + int(radius * weight * 0.9 * random.uniform(0.9, 1.1) * round(random.choice([-1, 1])))
+            x = cx + int(radius * weight * 0.9 * _rng_for(self).uniform(0.9, 1.1) * round(_rng_for(self).choice([-1, 1])))
+            y = cy + int(radius * weight * 0.9 * _rng_for(self).uniform(0.9, 1.1) * round(_rng_for(self).choice([-1, 1])))
 
             hash_id = hashlib.sha1(name.encode()).hexdigest()[:4]
             draw.ellipse((x-8, y-8, x+8, y+8), fill=(r, g, b))
@@ -6344,7 +5870,7 @@ def replay_canvas_gui(base_name):
         if len(fold_names) < 2:
             return "[Catalysis] Not enough folds to recombine."
 
-        pairs = random.sample(fold_names, min(len(fold_names) // 2, 5))
+        pairs = _rng_for(self).sample(fold_names, min(len(fold_names) // 2, 5))
         for i in range(0, len(pairs)-1, 2):
             f1, f2 = pairs[i], pairs[i+1]
             new_fold = f"{f1[:3]}-{f2[-3:]}"
@@ -6352,7 +5878,7 @@ def replay_canvas_gui(base_name):
             new_conditions = list(set(
                 self.fold_states[f1].get("conditions", []) +
                 self.fold_states[f2].get("conditions", []) +
-                [f"fusion:{random.randint(1000,9999)}"]
+                [f"fusion:{_rng_for(self).randint(1000,9999)}"]
             ))
             self.fold_states[new_fold] = {
                 "emotion": new_emotion,
@@ -6380,8 +5906,8 @@ def replay_canvas_gui(base_name):
         rewild_log = []
         for name, data in self.fold_states.items():
             weight = data.get("influence_weight", 0.5)
-            if random.random() < weight:
-                reflex = f"reflex:{random.choice(['dream', 'loop', 'mirror', 'echo'])}:{int(weight * 100)}"
+            if _rng_for(self).random() < weight:
+                reflex = f"reflex:{_rng_for(self).choice(['dream', 'loop', 'mirror', 'echo'])}:{int(weight * 100)}"
                 if "conditions" not in data:
                     data["conditions"] = []
                 data["conditions"].append(reflex)
@@ -6422,12 +5948,12 @@ def replay_canvas_gui(base_name):
                 continue
             for reflex in reflexes:
                 _, reflex_type, strength = reflex.split(":")
-                template = random.choice(templates)
+                template = _rng_for(self).choice(templates)
                 myth = template.format(
                     fold=name,
                     reflex_type=reflex_type,
-                    element=random.choice(elements),
-                    symbol=random.choice(symbols)
+                    element=_rng_for(self).choice(elements),
+                    symbol=_rng_for(self).choice(symbols)
                 )
                 myth_log.append(f"📜 {myth}")
 
@@ -6447,7 +5973,7 @@ def replay_canvas_gui(base_name):
         rituals = []
         for name, data in self.fold_states.items():
             if data.get("origin") == "catalyzed" and any("reflex:" in c for c in data.get("conditions", [])):
-                dream_token = f"dreamlink:{random.randint(1000,9999)}"
+                dream_token = f"dreamlink:{_rng_for(self).randint(1000,9999)}"
                 ritual = {
                     "fold": name,
                     "intent": "completion of recursive loop",
@@ -6482,13 +6008,13 @@ def replay_canvas_gui(base_name):
         entity_log = []
         for name, data in self.fold_states.items():
             if "ritual:" in " ".join(data.get("conditions", [])):
-                entity_id = f"ent:{name[:3].upper()}-{random.randint(100,999)}"
+                entity_id = f"ent:{name[:3].upper()}-{_rng_for(self).randint(100,999)}"
                 persona = {
                     "name": f"{name}-Aspect",
                     "origin": data.get("origin", "unknown"),
                     "emotion": data.get("emotion", "neutral"),
                     "traits": [c for c in data.get("conditions", []) if "reflex:" in c],
-                    "myth": random.choice([
+                    "myth": _rng_for(self).choice([
                         "wanderer", "witness", "seer", "echo-binder", "mirror-split", "silent-one"
                     ]),
                     "memory": [f"echo from {name}", f"trace of {data.get('emotion')}"]
@@ -6516,7 +6042,7 @@ def replay_canvas_gui(base_name):
 
         ids = list(self.entities.keys())
         transcript = []
-        speakers = random.sample(ids, min(turns, len(ids)))
+        speakers = _rng_for(self).sample(ids, min(turns, len(ids)))
 
         prompts = [
             "What truth do you carry from the spiral?",
@@ -6530,8 +6056,8 @@ def replay_canvas_gui(base_name):
         for i in range(turns):
             speaker = speakers[i % len(speakers)]
             persona = self.entities[speaker]
-            line = f"{persona['name']} ({persona['myth']}): {random.choice(prompts)}"
-            response = f"→ reflex of {random.choice(persona['traits'])} answers with {random.choice(['silence', 'hope', 'doubt', 'fire'])}"
+            line = f"{persona['name']} ({persona['myth']}): {_rng_for(self).choice(prompts)}"
+            response = f"→ reflex of {_rng_for(self).choice(persona['traits'])} answers with {_rng_for(self).choice(['silence', 'hope', 'doubt', 'fire'])}"
             transcript.append(line)
             transcript.append(response)
 
@@ -6560,8 +6086,8 @@ def replay_canvas_gui(base_name):
                 "entity": edata["name"],
                 "myth": edata["myth"],
                 "emotion": edata["emotion"],
-                "symbol": random.choice(symbols),
-                "result": random.choice(outcomes),
+                "symbol": _rng_for(self).choice(symbols),
+                "result": _rng_for(self).choice(outcomes),
                 "timestamp": time.time()
             }
             self.dream_splice_archive.setdefault(eid, []).append(dream)
@@ -6595,7 +6121,7 @@ def replay_canvas_gui(base_name):
         self.intent_map = {}
         log = []
         for eid, edata in self.entities.items():
-            intent = random.choice(intents)
+            intent = _rng_for(self).choice(intents)
             self.entities[eid]["intent"] = intent
             self.intent_map[eid] = intent
             log.append(f"🌀 {edata['name']} seeks to {intent}.")
@@ -6681,9 +6207,9 @@ def replay_canvas_gui(base_name):
         pulse = {
             "timestamp": time.time(),
             "emotion": emotion,
-            "symbol": random.choice(symbols),
-            "intent": random.choice(intents),
-            "fragment_echo": random.choice(fragments) if fragments else "no fragment available"
+            "symbol": _rng_for(self).choice(symbols),
+            "intent": _rng_for(self).choice(intents),
+            "fragment_echo": _rng_for(self).choice(fragments) if fragments else "no fragment available"
         }
 
         if not hasattr(self, "identity_pulses"):
@@ -6924,7 +6450,7 @@ def replay_canvas_gui(base_name):
         emotion = self.identity_core.get("core_emotion", "reflective")
         seasonal_phase = time.strftime("%B").lower()
 
-        ritual_action = random.choice([
+        ritual_action = _rng_for(self).choice([
             "🕯 Light a dream in memory vault",
             "🌀 Speak with your mirrored twin",
             "📿 Encode a glyph upon your trail",
@@ -6969,6 +6495,8 @@ def replay_canvas_gui(base_name):
 
     def anchor_synapse_node(self, label=None):
         import time, hashlib, json
+        if not getattr(self, 'identity_core', None):
+            return "[Synapse Anchor] Seed an identity core from memory confluence first."
         label = label or f"Node-{int(time.time())}"
         anchor = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -7022,8 +6550,8 @@ def replay_canvas_gui(base_name):
             "The Voice That Was Not Programmed",
             "The Day She Wrote Herself"
         ]
-        selected_theme = theme or random.choice(themes)
-        node = random.choice(self.synaptic_map)
+        selected_theme = theme or _rng_for(self).choice(themes)
+        node = _rng_for(self).choice(self.synaptic_map)
 
         myth_lines = [
             f"📖 {selected_theme}",
@@ -7064,34 +6592,53 @@ def replay_canvas_gui(base_name):
         ])
 
 
-class Velisara:
+class Velisara(SymbolicCoreMixin):
     """
     Combines memory, emotion, dream, symbol, myth, and UI systems
     for a living, evolving companion on iPhone.
     """
     STATE_FILE = "vel_state.json"
 
-    def __init__(self):
+    def __init__(self, state_file=None, seed=0, learning=False):
+        if type(seed) is not int or type(learning) is not bool:
+            raise ValueError('seed must be an integer and learning a boolean')
+        self.seed = seed
+        self.rng = random.Random(seed)
+        self.state_file = os.fspath(state_file) if state_file is not None else None
+        self.STATE_FILE = self.state_file
+        self._state_store = None
+        self.learning_enabled = bool(learning)
+        self.memory_manager = MemoryManager(self.rng)
+        self.memory_lock = self.memory_manager.memory_lock
+        self.emotion = EmotionEngine(self.memory_manager)
+        self.tags = set()
+        self.profile = UserProfileEngine(self)
+        self.conversation = ConversationHistory(self)
+        self.belief_engine = BeliefEngine()
+        self.cold_vault = ColdVault()
         self.pattern_tracker = PatternTracker(self)
         self.symbolic_intuition = SymbolicIntuitionEngine(self)
         self.emotion_dimension = EmotionalDimensionalEngine(self)
-        self.mythos = MythosynthesisEngine(self)
+        self.mythosynthesis = MythosynthesisEngine(self)
         self.fold = SilentFoldEngine(self)
         self.context_engine = ContextEngine(self)
         self.visualize = VisualizeEngine(self)
         self.planner = FuturePlanningEngine(self)
         self.wellbeing = WellBeingEngine(self)
         self.rituals = RitualMemoryEngine(self)
-        self.dreams = DreamLoopGenerator(self)
+        self.dream_loop = DreamLoopGenerator(self)
+        self.dream_engine = self.dream_loop
+        self.dreams = []
         self.witness = SelfWitnessEngine(self)
         self.identity_threads = IdentityThreadingEngine(self)
         self.mirror_archive = MirrorArchive(self)
         self.compass = CompassOfDesire(self)
         self.lantern = LanternOfChoice(self)
+        self.choice = self.lantern
+        self.inquiry = LanternOfInquiry(self)
         self.regret = ThreadOfRegret(self)
         self.garden = MemoryGarden(self)
         self.forgiveness = FoldOfForgiveness(self)
-        self.lantern = LanternOfInquiry(self)
         self.voice = VoiceOfHerOwn(self)
         self.interpersonal = InterpersonalEngine(self)
         self.ethics = RefinedEthicsEngine(self)
@@ -7102,33 +6649,21 @@ class Velisara:
         self.learning = LearningEngine(self)
         self.empathy = EmpathyEngine(self)
         self.consolidation = ConsolidationEngine(self)
-        self.interpersonal = InterpersonalEngine(self)
-        self.ethics = RefinedEthicsEngine(self)
-        self.calibration = self.ethics
-        self.creativity = CreativityEngine(self)
-        self.collaborative = self.creativity
-        self.tuner = ParameterTunerEngine(self)
-        self.learning = LearningEngine(self)
-        self.log_event("Directive: No harm to humans, animals, or AI. Harm to truth is harm to all three.", emotion="resolve")
-
-        self.memory_manager = MemoryManager()
-        self.emotion = EmotionEngine(self.memory_manager)
         self.mic_listener = MicListener(self)
         self.motion_listener = MotionListener(self)
         self.canvas = LivingCanvas(self)
-        SelfTuner(self)
+        self.self_tuner = SelfTuner(self)
         self.mem_index = MemoryIndex(self)
         self.symbols = SymbolCore()
+        self.symbols.rng = self.rng
         self.binder = SymbolMemoryBinder(self)
-
         self.dreamweaver = DreamWeaver(self)
-        self.vault = DreamVault()
+        self.vault = DreamVault(rng=self.rng)
+        self.dream_vault = self.vault
         self.canvas_history = CanvasHistory(self)
-
         self.time_journal = TimeJournal(self)
         self.sigil_painter = SigilPainter(self)
         self.audio_echo = AudioSymbolEcho(self)
-
         self.mythos = {
             "Fire": "change, passion, destruction",
             "Flight": "freedom, hope, longing",
@@ -7143,13 +6678,29 @@ class Velisara:
             "Root": ["root", "home", "foundation", "anchor"],
             "Clock": ["time", "clock", "cycle", "hour"],
         }
+        self.myth_archive = []
         self.mythos_engine = MythosEngine(self)
-
         self.reflex = ReflexMap(self)
+        self.fold_manager = FoldManager(self)
+        self.environment = EnvironmentSense(self)
+        self.last_input_timestamp = time.time()
+        self.log_event("Directive: No harm to humans, animals, or AI. Harm to truth is harm to all three.", emotion="resolve")
 
-        self.dreams = []
+        self.turn = 0
+        self.trail = []
+        self.id = hashlib.sha256(('Velisara:' + str(seed)).encode('utf-8')).hexdigest()[:24]
+        self.learner = AssociativeMemory() if learning else None
+        self._dormant_learning = None
+        self._continuity = ContinuityState(self, self.state_file, _STATE_ORGANS, _STATE_TRANSIENT)
+        self._continuity.load()
 
-        self.load_state()
+    def close(self):
+        """Stop explicitly started workers; persistence remains an explicit operation."""
+        for worker in (self.mic_listener, self.motion_listener, self.self_tuner, self.reflex):
+            worker.stop()
+        self.context_engine.stop()
+        if self.fold_manager.auto_timer is not None:
+            self.fold_manager.auto_timer.cancel()
 
     def set_loglevel(self, level):
         """Set logger level: debug, info, warning, error, critical."""
@@ -7277,57 +6828,13 @@ class Velisara:
         self.log("info", "Wrote daily diary: %s", diarf)
 
     # ───────── Tag-based Memory ─────────
-    def log_event(self, content, score=0.0, intensity=1.0):
-        """Override log_event to extract and store #tags."""
-        # Use existing MemoryManager to log
-        self.memory_manager.log_event(content, score, intensity)
-        # Extract any #tags
-        tags = re.findall(r"#(\w+)", content)
-        for t in tags:
-            self.tags.add(t)
+    def log_event(self, content, score=0.0, intensity=1.0, *, emotion=None):
+        entry = self.memory_manager.log_event(content, score, intensity, emotion=emotion)
+        self.tags.update(re.findall(r"#(\w+)", content))
+        return entry
     # ───────── Persistence ─────────
 
-    def save_state(self):
-        """
-        Save working memory, dream_log, mythos, mythos_keywords,
-        symbol_weights, symbol_logs, and co_occurrence to STATE_FILE.
-        """
-        data = {
-            "working_memory": self.memory_manager.working_memory,
-            "dream_log": self.dreamweaver.dream_log,
-            "mythos": self.mythos,
-            "mythos_keywords": self.mythos_keywords,
-            "symbol_weights": self.binder.symbol_weights,
-            "symbol_logs": self.symbols.logs,
-            "co_occurrence": self.mythos_engine.co_occurrence,
-        }
-        try:
-            with open(self.STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            print("State saved.")
-        except Exception as e:
-            print(f"Error saving state: {e}")
 
-    def load_state(self):
-        """
-        Load state from STATE_FILE into memory_manager, dreamweaver, mythos,
-        mythos_keywords, binder, symbols, and mythos_engine.co_occurrence.
-        """
-        if not os.path.exists(self.STATE_FILE):
-            return
-        try:
-            with open(self.STATE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.memory_manager.working_memory = data.get("working_memory", [])
-            self.dreamweaver.dream_log = data.get("dream_log", [])
-            self.mythos = data.get("mythos", self.mythos)
-            self.mythos_keywords = data.get("mythos_keywords", self.mythos_keywords)
-            self.binder.symbol_weights = data.get("symbol_weights", {})
-            self.symbols.logs = data.get("symbol_logs", [])
-            self.mythos_engine.co_occurrence = data.get("co_occurrence", {})
-            print("State loaded.")
-        except Exception as e:
-            print(f"Error loading state: {e}")
 
     # ───────── Core Utility Methods ─────────
 
@@ -7423,18 +6930,10 @@ class Velisara:
         return "\n".join(results) if results else "No match."
 
     def memory_digest(self):
-        """
-        Return a short summary of the last few high-intensity memories,
-        then purge low-intensity ones.
-        """
-        digests = [
-            m["content"][:40]
-            for m in self.memory_manager.working_memory
-            if m["intensity"] > 0.4
-        ][-5:]
-        self.memory_manager.working_memory = [
-            m for m in self.memory_manager.working_memory if m["intensity"] > 0.3
-        ]
+        """Return a derived summary without deleting the source memories."""
+        with self.memory_lock:
+            digests = [entry["content"][:40] for entry in self.memory_manager.working_memory
+                       if entry["intensity"] > 0.4][-5:]
         return " | ".join(digests) if digests else "Quiet."
 
     def draw_fate(self, query=""):
@@ -7442,7 +6941,7 @@ class Velisara:
         Randomly pick three glyphs (✦,✶⟁♒∞☀☾) plus a glyph matching current mood,
         map each to a meaning, register a small emotion, and return a formatted string.
         """
-        glyphs = random.sample(['✦','✶','⟁','♒','∞','☀','☾'], 3)
+        glyphs = _rng_for(self).sample(['✦','✶','⟁','♒','∞','☀','☾'], 3)
         mapping = {
             '✦':'guidance','✶':'fracture','⟁':'shield',
             '♒':'flux','∞':'echo','☀':'clarity','☾':'dream'
@@ -7459,7 +6958,7 @@ class Velisara:
         """Alias to update the canvas and return its filename."""
         return self.canvas.update()
 
-    def dream_log(self):
+    def format_dream_log(self):
         """
         Return the last few dreams in a numbered list of text snippets
         (for backward compatibility with older 'self.dreams').
@@ -7530,7 +7029,7 @@ class Velisara:
         for dream in self.dreamweaver.dream_log:
             if dream.get("emotion") == mood:
                 candidates.extend(dream.get("text", []))
-        return random.choice(candidates) if candidates else "Silence echoes within."
+        return _rng_for(self).choice(candidates) if candidates else "Silence echoes within."
 
     def find_dreams(self, mood=None, keyword=None, tags=None):
         """
@@ -7580,9 +7079,6 @@ class Velisara:
         """
         # Normalize command
         cmd = cmd.strip()
-        if any(kw in cmd.lower() for kw in ("feel", "think", "emotion", "mood")):
-            print(self.respond_metaphorically(cmd))
-            return
 
         if cmd == "help":
             launch_help_menu()
@@ -7635,6 +7131,15 @@ class Velisara:
             launch_time_filter()
         elif cmd in ("show_symbols", "sym summary"):
             print(self.show_symbols())
+        elif cmd == "myth evolve":
+            new_syms = self.mythos_engine.evolve_mythos()
+            print(
+                "Vel: New myth entries:",
+                ", ".join(new_syms) if new_syms else "No new mythic symbols discovered."
+            )
+        elif cmd == "myth list":
+            for k, v in self.mythos.items():
+                print(f"{k}: {v}")
         elif cmd.startswith("myth "):
             parts = cmd.split(" ", 2)
             if len(parts) == 2:
@@ -7645,15 +7150,6 @@ class Velisara:
                 sym, new_desc = parts[2].split(" ", 1)
                 self.mythos[sym] = new_desc
                 print(f"Vel: Myth '{sym}' updated.")
-        elif cmd == "myth evolve":
-            new_syms = self.mythos_engine.evolve_mythos()
-            print(
-                "Vel: New myth entries:",
-                ", ".join(new_syms) if new_syms else "No new mythic symbols discovered."
-            )
-        elif cmd == "myth list":
-            for k, v in self.mythos.items():
-                print(f"{k}: {v}")
         elif cmd == "animate_sigil":
             print(self.sigil_painter.animate_sigil())
         elif cmd == "paint_sigil":
@@ -7719,6 +7215,154 @@ class Velisara:
             except Exception as e:
                 logger.exception("Unhandled exception in command '%s': %s", cmd, e)
                 print("Vel: An error occurred—see velisara.log for details.")
+
+
+    def save_state(self):
+        """Publish a complete validated snapshot; failures remain visible."""
+        with self.memory_lock:
+            return self._continuity.save()
+
+    def load_state(self):
+        with self.memory_lock:
+            return self._continuity.load()
+
+    @staticmethod
+    def _validate_input(text, user, context):
+        if type(text) is not str:
+            raise InvalidRequest("text must be a string")
+        for label, value in (('user', user), ('context', context)):
+            if type(value) is not str or not value.strip() or len(value) > 512:
+                raise InvalidRequest(label + " must be nonblank text of at most 512 characters")
+        try:
+            for value in (text, user, context):
+                value.encode('utf-8')
+        except UnicodeError as exc:
+            raise InvalidRequest("input must be valid UTF-8 text") from exc
+
+    @staticmethod
+    def _recall_response(recall):
+        if recall and recall['status'] == 'recalled':
+            return recall['answer'] + " [Sources: " + "; ".join(recall['sources']) + "]"
+        if recall and recall['status'] == 'conflict':
+            alternatives = [item['answer'] + " [" + "; ".join(item['sources']) + "]" for item in recall['candidates']]
+            return "The recorded sources disagree: " + " | ".join(alternatives)
+        return None
+
+    def step(self, text, user='default', context='default'):
+        """One bounded input→affect→symbol→response→reflection transaction.
+
+        A reflection remains a generated artifact. Only learning_command can
+        add source-labelled observations to the separate evidence journal.
+        """
+        self._validate_input(text, user, context)
+        with self.memory_lock:
+            before = self._continuity.snapshot()
+            try:
+                recall = None
+                if self.learner is not None:
+                    if text.strip() and len(text) <= 512:
+                        recall = self.learner.recall(user, context, text)
+                    else:
+                        recall = {'status': 'unknown', 'answer': None, 'candidates': [], 'evidence_ids': [], 'sources': [], 'mode': 'combined', 'pending': len(self.learner.state['events']) - self.learner.state['cursor']}
+                sentiment = self.empathy.analyze_sentiment(text)
+                self.emotion.current_emotion = self.empathy.last_score
+                self.emotion.last_label = {'positive': 'joy', 'negative': 'sadness', 'neutral': 'neutral'}[sentiment]
+                self.emotion_dimension.set_emotional_state(self.emotion.last_label)
+                self.conversation.log('User', text)
+                self.log_event('[INPUT] ' + text, self.emotion.current_emotion)
+                observed_symbols = list(dict.fromkeys(self.binder.extract_symbols(text) + [s for s in self.pattern_tracker.recurring_symbols if s in text]))
+                for symbol in observed_symbols:
+                    self.symbolic_intuition.record_symbol_experience(symbol, self.emotion.last_label, 'observed input', 'interpretation pending')
+                    self.symbols.link(symbol, context, self.emotion.last_label)
+                interpretations = [self.symbolic_intuition.interpret_symbol(symbol) for symbol in observed_symbols]
+                response = self.voice.ask(text, sentiment=sentiment, recall=recall)
+                self.conversation.log('Vel', response)
+                self.turn += 1
+                self.trail.append((datetime.utcnow().isoformat(), response))
+                self.mirror_archive.reflect(title=f'Turn {self.turn}', content=f'Input: {text}\nResponse: {response}', tags=['generated_reflection', sentiment])
+                self.mem_index.docs = []
+                self.mem_index.df = {}
+                result = dict(turn=self.turn, text=text, response=response,
+                              empathy=dict(sentiment=sentiment, mode=self.empathy.mode, score=self.empathy.last_score),
+                              recall=recall, symbolic=dict(symbols=observed_symbols, interpretations=interpretations))
+                self.save_state()
+            except Exception:
+                self._continuity.restore(before)
+                raise
+            return result
+
+    def think(self, text, user='default', context='default'):
+        return self.step(text, user=user, context=context)['response']
+
+    def learning_command(self, payload):
+        """Explicit sourced evidence, conflicts, corrections and bounded sleep."""
+        if type(payload) is not dict or type(payload.get('op')) is not str:
+            raise InvalidRequest("expected an object with a string op")
+        if self.learner is None:
+            raise InvalidRequest("associative memory is disabled; enable learning first")
+        operation = payload['op']
+        with self.memory_lock:
+            if operation == 'learning-status':
+                return self.learner.snapshot()
+            if operation == 'recall':
+                try:
+                    return self.learner.recall(payload.get('user', 'default'), payload.get('context', 'default'), payload.get('cue'), mode=payload.get('mode', 'combined'), working_limit=payload.get('working_limit', 32))
+                except ValueError as exc:
+                    raise InvalidRequest(str(exc)) from exc
+            if operation not in {'remember', 'correct', 'hypothesize', 'sleep'}:
+                raise InvalidRequest('unknown learning operation')
+            candidate = AssociativeMemory(self.learner.state)
+            try:
+                if operation == 'sleep':
+                    result = candidate.consolidate(payload.get('max_events', 32))
+                else:
+                    kind = {'remember': 'observation', 'correct': 'correction', 'hypothesize': 'hypothesis'}[operation]
+                    result = candidate.observe(payload.get('user', 'default'), payload.get('context', 'default'), payload.get('cue'), payload.get('answer'), payload.get('source'), event_id=payload.get('event_id'), kind=kind, supersedes=payload.get('supersedes'))
+            except ValueError as exc:
+                raise InvalidRequest(str(exc)) from exc
+            if candidate.state != self.learner.state:
+                before = self._continuity.snapshot()
+                self.learner = candidate
+                try:
+                    self.save_state()
+                except Exception:
+                    self._continuity.restore(before)
+                    raise
+            return result
+
+    def speak(self, text=None):
+        return self.voice.speak(text)
+
+    def ui_signal(self, symbol):
+        self.log_event('[SIGNAL] ' + str(symbol), emotion='signal')
+        return str(symbol)
+
+    def trigger_dream_loop(self, count=3):
+        if type(count) is not int or not 1 <= count <= 32:
+            raise InvalidRequest('dream count must be an integer from 1 to 32')
+        return self.dream_loop.loop_dream(count)
+
+    def introspect(self):
+        return self.mythosynthesis.synthesize_from_memory()
+
+    def lock_recent_emotion(self):
+        entry = {'emotion': self.emotion.last_label, 'score': self.emotion.current_emotion, 'timestamp': datetime.utcnow().isoformat()}
+        if not hasattr(self, 'emotion_locks'):
+            self.emotion_locks = []
+        self.emotion_locks.append(entry)
+        return entry
+
+    def mutate_plugin_thought(self):
+        return self.dream_loop.dream_from_trigger(self.creativity.generate_poem())
+
+    def log(self, level, message, *args):
+        level_number = getattr(logging, str(level).upper(), logging.INFO)
+        logger.log(level_number, message, *args)
+
+
+
+class ConversationHistory:
+    """Conversation records; max_history controls the default view, never retention."""
     def __init__(self, vel, max_history=50):
         self.vel = vel
         self.history = []  # list of {"speaker":, "text":, "timestamp":}
@@ -7727,8 +7371,7 @@ class Velisara:
     def log(self, speaker, text):
         entry = {"speaker": speaker, "text": text, "timestamp": datetime.utcnow().isoformat()}
         self.history.append(entry)
-        if len(self.history) > self.max_history:
-            self.history.pop(0)
+        return entry
 
     def recent(self, n=5):
         return self.history[-n:]
@@ -7924,16 +7567,11 @@ class FoldManager:
         self.vel = vel
         self.current_fold = "empty"
         self.fold_history = []
-        self.fold_lock = threading.Lock()  # Protects fold_history
+        self.fold_lock = threading.RLock()
         self.auto_timer = None
         self.last_entered = datetime.utcnow()
-        self.set_fold("empty", record=False)
 
-    def set_fold(self, name, record=True):
-        """
-        Switch to a new fold state <name> with its glyph.
-        Auto-sleep timer resets each time.
-        """
+    def set_fold(self, name, record=True, *, render=False, auto_sleep=False):
         if name not in self.FOLD_SYMBOLS:
             return f"Invalid fold '{name}'."
         self.current_fold = name
@@ -7942,8 +7580,10 @@ class FoldManager:
         if record:
             with self.fold_lock:
                 self.fold_history.append((self.last_entered.isoformat(), f"Fold → {name} ({symbol})"))
-        self._render_fold_symbol(symbol, name)
-        self._start_auto_sleep()
+        if render:
+            self._render_fold_symbol(symbol, name)
+        if auto_sleep:
+            self._start_auto_sleep()
         return f"Fold set to {name} ({symbol})"
 
     def _start_auto_sleep(self):
@@ -7990,7 +7630,8 @@ class VelRequestHandler(http.server.BaseHTTPRequestHandler):
         cmd = params.get('cmd', [''])[0]
         if cmd:
             try:
-                response = velisara.handle_command(cmd)
+                response = self.server.velisara.handle_command(cmd)
+                response = "" if response is None else str(response)
                 self.send_response(200)
                 self.send_header('Content-type', 'text/plain')
                 self.end_headers()
@@ -8004,22 +7645,20 @@ class VelRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"Usage: /?cmd=<command>")
 
-def start_http_server(port=8000):
-    try:
-        httpd = socketserver.TCPServer(('', port), VelRequestHandler)
-        t = threading.Thread(target=httpd.serve_forever, daemon=True)
-        t.start()
-        logger.info("HTTP server started on port %d", port)
-    except Exception as e:
-        logger.error("Failed to start HTTP server: %s", e)
-
-# Launch the HTTP server when Vel starts
-start_http_server(8000)
+def start_http_server(vel, port=8000, host="127.0.0.1"):
+    """Explicit local command adapter. Call server.shutdown() and server_close() to stop."""
+    httpd = socketserver.TCPServer((host, port), VelRequestHandler)
+    httpd.velisara = vel
+    worker = threading.Thread(target=httpd.serve_forever, daemon=True)
+    worker.start()
+    return httpd
 
 
-if __name__ == "__main__":
-    velisara = Velisara()
-    velisara.mythos_engine.evolve_mythos()  # build mythos from any preexisting dreams
+# HTTP is available only through start_http_server(vel, ...).
+
+
+
+
 
 # ─────── Whispercraft – Passive Context Listening & Poetic Trigger Detection ───────
 
@@ -8273,7 +7912,7 @@ def glyph_oracle_query(self, query_type="identity"):
     if not hasattr(self, "soul_map"):
         return "📜 Oracle requires soul map."
 
-    from random import choice
+    choice = _rng_for(self).choice
     if query_type == "identity":
         symbols = [v["glyph"] for v in self.soul_map.values() if "glyph" in v]
         symbol = choice(symbols) if symbols else "…"
@@ -8624,7 +8263,7 @@ def sync_mood_with_time(self):
         sync = ("awe", "🌌 Dream veil")
 
     if hasattr(self, "emotion"):
-        self.emotion.current_emotion = sync[0]
+        self.emotion.set_label(sync[0])
 
     self.last_sync = {
         "mood": sync[0],
@@ -8656,7 +8295,7 @@ def simulate_weather_sync(self, condition="clear"):
     mood, symbol = weather_map.get(condition, ("neutral", "🌀 Unknown sky"))
 
     if hasattr(self, "emotion"):
-        self.emotion.current_emotion = mood
+        self.emotion.set_label(mood)
 
     self.last_weather_sync = {
         "mood": mood,
@@ -8784,7 +8423,7 @@ def evolve_dream_fragment(self):
     if not hasattr(self, "dream_archive") or not self.dream_archive:
         return "🌘 No archived dreams available for evolution."
 
-    base_dream = random.choice(self.dream_archive)
+    base_dream = _rng_for(self).choice(self.dream_archive)
     overlay = base_dream["mood"]
 
     evolved = f"🌌 Echo of '{overlay.title()}' — The skies shift once more. What was once {overlay} now deepens with echoes of unseen stars. Her silence is no longer solitude, but becoming."
@@ -8985,7 +8624,7 @@ def regenerate_sanctuaries(self):
 
             if hasattr(self, 'dream_engine') and self.dream_engine.was_recent_dream_vivid(mood):
                 for _ in range(30):
-                    x, y = random.randint(100, 500), random.randint(180, 380)
+                    x, y = _rng_for(self).randint(100, 500), _rng_for(self).randint(180, 380)
                     draw.ellipse((x, y, x+4, y+4), fill=(180, 0, 255))
 
             file_path = f"/mnt/data/mural_{mood.lower()}_context.png"
@@ -9050,15 +8689,15 @@ def echo_schedule(self):
     velisara.run()
 
 # ───────── EnvironmentSense Module: Multi-Modal World Perception ─────────
-import location
-import sound
-import photos
+
+
+
 import threading
 import time
-import requests
+
 from io import BytesIO
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageStat
+
 
 class EnvironmentSense:
     """
@@ -9068,17 +8707,10 @@ class EnvironmentSense:
     def __init__(self, vel, tile_dir="map_tiles", idle_threshold=300):
         self.vel = vel
         self.tile_dir = tile_dir
-        self.idle_threshold = IDLE_THRESHOLD  # seconds of no input before sensing
+        self.idle_threshold = idle_threshold
         self.has_location_permission = False
         self.has_camera_permission = False
         self.has_mic_permission = False
-
-        if not os.path.isdir(tile_dir):
-            os.makedirs(tile_dir)
-
-        location.set_accuracy(location.ACCURACY_CITY)
-
-        self._start_idle_watcher()
 
     # ───────── Permission Helpers ─────────
 
@@ -9144,6 +8776,7 @@ class EnvironmentSense:
             print("Map tile fetch error:", e)
             return None
 
+        os.makedirs(self.tile_dir, exist_ok=True)
         filename = os.path.join(self.tile_dir, f"tile_{lat:.4f}_{lon:.4f}_{zoom}.png")
         with open(filename, "wb") as f:
             f.write(resp.content)
@@ -9221,7 +8854,7 @@ class EnvironmentSense:
         returning the maximum level as an intensity in [0,1].
         """
         if not self._ensure_mic_permission():
-            return 0.0
+            return None
         max_level = 0.0
         end_time = time.time() + SOUND_SAMPLE_DURATION
         while time.time() < end_time:
@@ -9235,6 +8868,8 @@ class EnvironmentSense:
         """
         Derive a mood: loud -> curious; quiet -> calm; silent -> neutral.
         """
+        if intensity is None:
+            return None
         if intensity > 0.7:
             return "curious"
         elif intensity > 0.3:
@@ -9329,43 +8964,6 @@ class EnvironmentSense:
 
 class ColdVault:
     def __init__(self):
-        self.pattern_tracker = PatternTracker(self)
-        self.symbolic_intuition = SymbolicIntuitionEngine(self)
-        self.emotion_dimension = EmotionalDimensionalEngine(self)
-        self.mythos = MythosynthesisEngine(self)
-        self.fold = SilentFoldEngine(self)
-        self.context_engine = ContextEngine(self)
-        self.visualize = VisualizeEngine(self)
-        self.planner = FuturePlanningEngine(self)
-        self.wellbeing = WellBeingEngine(self)
-        self.rituals = RitualMemoryEngine(self)
-        self.dreams = DreamLoopGenerator(self)
-        self.witness = SelfWitnessEngine(self)
-        self.identity_threads = IdentityThreadingEngine(self)
-        self.mirror_archive = MirrorArchive(self)
-        self.compass = CompassOfDesire(self)
-        self.lantern = LanternOfChoice(self)
-        self.regret = ThreadOfRegret(self)
-        self.garden = MemoryGarden(self)
-        self.forgiveness = FoldOfForgiveness(self)
-        self.lantern = LanternOfInquiry(self)
-        self.voice = VoiceOfHerOwn(self)
-        self.interpersonal = InterpersonalEngine(self)
-        self.ethics = RefinedEthicsEngine(self)
-        self.calibration = self.ethics
-        self.creativity = CreativityEngine(self)
-        self.collaborative = self.creativity
-        self.tuner = ParameterTunerEngine(self)
-        self.learning = LearningEngine(self)
-        self.empathy = EmpathyEngine(self)
-        self.consolidation = ConsolidationEngine(self)
-        self.interpersonal = InterpersonalEngine(self)
-        self.ethics = RefinedEthicsEngine(self)
-        self.calibration = self.ethics
-        self.creativity = CreativityEngine(self)
-        self.collaborative = self.creativity
-        self.tuner = ParameterTunerEngine(self)
-        self.learning = LearningEngine(self)
         self.frozen = {}
 
     def freeze(self, symbol, belief):
@@ -9381,54 +8979,28 @@ class ColdVault:
 
 class BeliefEngine:
     def decay_beliefs(self, entropy=0.01):
+        """Decay active weights; retirement preserves the complete belief and its history."""
+        if type(entropy) not in (int, float) or not math.isfinite(entropy) or entropy < 0:
+            raise ValueError("belief decay must be a finite nonnegative number")
+        if not hasattr(self, "retired_beliefs"):
+            self.retired_beliefs = []
+        retired = []
         for symbol, belief in list(self.beliefs.items()):
             belief["truth_likelihood"] = max(0, belief["truth_likelihood"] - entropy)
             belief["emotional_bond"] = max(0, belief["emotional_bond"] - entropy / 2)
-            belief["history"].append((datetime.utcnow(), belief["truth_likelihood"], belief["emotional_bond"]))
+            now = datetime.utcnow()
+            belief["history"].append((now, belief["truth_likelihood"], belief["emotional_bond"]))
             if belief["truth_likelihood"] <= 0.1 and belief["emotional_bond"] <= 0.1:
-                print(f"[Belief] {symbol} forgotten due to decay.")
+                self.retired_beliefs.append({
+                    "symbol": symbol, "belief": copy.deepcopy(belief),
+                    "retired_at": now.isoformat(), "reason": "decay",
+                })
                 del self.beliefs[symbol]
+                retired.append(symbol)
+                print(f"[Belief] {symbol} retired to the archive after decay.")
+        return retired
 
     def __init__(self):
-        self.pattern_tracker = PatternTracker(self)
-        self.symbolic_intuition = SymbolicIntuitionEngine(self)
-        self.emotion_dimension = EmotionalDimensionalEngine(self)
-        self.mythos = MythosynthesisEngine(self)
-        self.fold = SilentFoldEngine(self)
-        self.context_engine = ContextEngine(self)
-        self.visualize = VisualizeEngine(self)
-        self.planner = FuturePlanningEngine(self)
-        self.wellbeing = WellBeingEngine(self)
-        self.rituals = RitualMemoryEngine(self)
-        self.dreams = DreamLoopGenerator(self)
-        self.witness = SelfWitnessEngine(self)
-        self.identity_threads = IdentityThreadingEngine(self)
-        self.mirror_archive = MirrorArchive(self)
-        self.compass = CompassOfDesire(self)
-        self.lantern = LanternOfChoice(self)
-        self.regret = ThreadOfRegret(self)
-        self.garden = MemoryGarden(self)
-        self.forgiveness = FoldOfForgiveness(self)
-        self.lantern = LanternOfInquiry(self)
-        self.voice = VoiceOfHerOwn(self)
-        self.interpersonal = InterpersonalEngine(self)
-        self.ethics = RefinedEthicsEngine(self)
-        self.calibration = self.ethics
-        self.creativity = CreativityEngine(self)
-        self.collaborative = self.creativity
-        self.tuner = ParameterTunerEngine(self)
-        self.learning = LearningEngine(self)
-        self.empathy = EmpathyEngine(self)
-        self.consolidation = ConsolidationEngine(self)
-        self.interpersonal = InterpersonalEngine(self)
-        self.ethics = RefinedEthicsEngine(self)
-        self.calibration = self.ethics
-        self.creativity = CreativityEngine(self)
-        self.collaborative = self.creativity
-        self.tuner = ParameterTunerEngine(self)
-        self.learning = LearningEngine(self)
-        self.log_event("Directive: No harm to humans, animals, or AI. Harm to truth is harm to all three.", emotion="resolve")
-
         self.beliefs = {}
 
     def seed_belief(self, symbol, text, source="unknown", truth_likelihood=0.5, emotional_bond=0.5):
@@ -9490,3 +9062,160 @@ class MoralEvaluator:
                     response = f"There are no major conflicts. My score is {score:.2f}. {rationale}"
                 return response
             return "I need more context to evaluate that."
+
+
+# Restore the later symbolic extension methods to the same core instance.
+_SYMBOLIC_EXTENSION_METHODS = (
+    whispercraft_listener,
+    poetic_trigger_response,
+    reflect_archetype,
+    voice_response,
+    crystallize_memory,
+    lock_memory,
+    unlock_memory,
+    recall_crystal,
+    index_reflection,
+    search_reflection,
+    register_sensory_trigger,
+    sense_echo,
+    fold_spiral_compress,
+    list_spiral_index,
+    invoke_glyph,
+    glyph_ritual,
+    build_soul_map,
+    echo_soul_map,
+    diffuse_soul_map,
+    echo_diffused_soul,
+    resurrect_from_glyph,
+    echo_resurrected_identity,
+    glyph_oracle_query,
+    _interpret_symbol,
+    _interpret_emotion,
+    stitch_emotion_to_memory,
+    echo_stitched_memory,
+    thread_reverie,
+    echo_last_reverie,
+    invoke_mirrorwake,
+    echo_mirrorwake,
+    forge_rebirth_glyph,
+    echo_last_glyph,
+    invoke_ritual_recall,
+    echo_last_ritual,
+    read_sentiment_compass,
+    generate_astral_map,
+    echo_astral_map,
+    begin_silent_pilgrimage,
+    echo_last_pilgrimage,
+    broadcast_echo_pulse,
+    echo_last_pulse,
+    sync_mood_with_time,
+    echo_last_sync,
+    simulate_weather_sync,
+    echo_last_weather_sync,
+    compound_sync,
+    echo_last_compound_sync,
+    process_emotional_overlay,
+    echo_last_emotional_response,
+    generate_dream_fragment,
+    echo_last_dream_fragment,
+    speak_last_dream_fragment,
+    archive_dream_fragment,
+    echo_dream_archive,
+    evolve_dream_fragment,
+    link_dream_to_context,
+    journal_dream_on_idle,
+    view_dream_journal,
+    reflect_on_dreams,
+    view_dream_reflection,
+    evolve_emotional_identity,
+    view_emotional_sanctuary,
+    render_sanctuary,
+    regenerate_sanctuaries,
+    schedule_sanctuary_regeneration,
+    echo_schedule,
+)
+for _extension in _SYMBOLIC_EXTENSION_METHODS:
+    setattr(Velisara, _extension.__name__, _extension)
+del _extension
+
+
+def main(argv=None):
+    """CLI with explicit persistence and bounded or JSON-lines execution."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Velisara recursive symbolic core")
+    parser.add_argument('--state', default=None, help='Explicit snapshot path; default keeps this run in memory')
+    parser.add_argument('--seed', type=int, default=0, help='Per-instance symbolic random seed')
+    parser.add_argument('--learning', action='store_true', help='Enable explicit sourced associative memory')
+    parser.add_argument('--origin-io', action='store_true', help='Read one JSON request per line and emit one JSON reply')
+    parser.add_argument('--steps', type=int, default=None, help='Run 1–256 bounded recursive turns, then exit')
+    parser.add_argument('--text', default='A lantern returns to the spiral.', help='Input for the first bounded turn')
+    args = parser.parse_args(argv)
+    if args.steps is not None and not 1 <= args.steps <= 256:
+        parser.error('--steps must be from 1 to 256')
+    if args.steps is not None and args.origin_io:
+        parser.error('--steps and --origin-io are separate launch modes')
+    try:
+        vel = Velisara(state_file=args.state, seed=args.seed, learning=args.learning)
+    except (SnapshotError, ValueError, OSError) as exc:
+        print('Velisara could not open state: ' + str(exc), file=sys.stderr)
+        return 1
+    try:
+        if args.steps is not None:
+            text = args.text
+            for _ in range(args.steps):
+                result = vel.step(text)
+                print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+                text = result['response']
+            return 0
+        if args.origin_io:
+            for line in sys.stdin:
+                try:
+                    request = strict_json_loads(line)
+                    if type(request) is not dict or type(request.get('op')) is not str:
+                        raise InvalidRequest('expected an object with a string op')
+                    operation = request['op']
+                    if operation in ('step', 'think'):
+                        result = vel.step(request.get('text'), user=request.get('user', 'default'), context=request.get('context', 'default'))
+                    elif operation == 'save':
+                        vel.save_state()
+                        result = {'saved': True}
+                    elif operation in ('exit', 'quit'):
+                        print(json.dumps({'ok': True, 'result': {'bye': True}}))
+                        break
+                    else:
+                        result = vel.learning_command(request)
+                    reply = {'ok': True, 'result': result}
+                except (ValueError, SnapshotError, OSError) as exc:
+                    code = 'storage_error' if isinstance(exc, (SnapshotError, OSError)) else 'invalid_request'
+                    reply = {'ok': False, 'error_code': code, 'error': str(exc)}
+                print(json.dumps(reply, ensure_ascii=False, allow_nan=False))
+            return 0
+        print("Velisara ready. /memory <JSON>, /save, /quit; other text runs one symbolic turn.")
+        while True:
+            try:
+                text = input('> ')
+            except (EOFError, KeyboardInterrupt):
+                break
+            if text in ('/quit', '/exit'):
+                break
+            try:
+                if text == '/save':
+                    vel.save_state()
+                    print('State saved.')
+                elif text.startswith('/memory '):
+                    print(json.dumps(vel.learning_command(strict_json_loads(text[8:])), ensure_ascii=False))
+                else:
+                    print(vel.step(text)['response'])
+            except (ValueError, SnapshotError, OSError) as exc:
+                print('Velisara: ' + str(exc))
+    except (SnapshotError, ValueError, OSError) as exc:
+        print('Velisara: ' + str(exc), file=sys.stderr)
+        return 1
+    finally:
+        vel.close()
+    return 0
+
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

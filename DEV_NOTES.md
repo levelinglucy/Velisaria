@@ -1,6 +1,22 @@
-# Sanctified Monolith · developer notes
+# Velisaria · developer notes
 
-## Development summary
+## Larger monolith repair · 12 November 2026
+
+**Goal and scope:** Dylan requested repairs to `velisara_monolith_final_fixed_empathy.py` using the working ideas from Sanctified while retaining the larger nonlinear symbolic design. The starting tree is `e8f2c6ac0f3f1ecdf2d0af6592d3dd27d482b7b9` at main revision `57ac1c0290e152e45129fdb0c7c89ff6d273828d`. This makes the named larger file an actively repaired source prototype; the two other historical monolith variants remain untouched. The original is retained in git history.
+
+**Structural decision:** restore 197 functions trapped inside `replay_canvas_gui` as `SymbolicCoreMixin` methods (including a distinct name for the earlier ritual), attach the 67 later audited extension functions explicitly, and separate the conversation initializer that replaced `Velisara.__init__`. Consolidate accidental duplicate engines using their richer preference, empathy, explanation and calibration capabilities. Preserve separate dream/mapping/choice state and engine objects. Repair narrow constructors rather than let copied whole-core constructors recursively construct themselves.
+
+**Runtime decision:** use `Velisara(state_file=None, seed=0, learning=False)`, explicit `step`, save/load and close; retain direct organ APIs. Core startup is quiet and headless, optional features require real providers, and workers/server/sensors start only on explicit calls. Per-instance random state controls symbolic choices and survives restart. Pattern scans suppress only same-stack reentry, retaining the feedback connection for the next explicit scan.
+
+**Experience and memory:** compute current empathy before response selection; share `associative_memory.py` for explicit evidence, corrections, conflict, hypotheses and bounded consolidation. Generated symbolic material remains separate. Use `velisara_runtime.py` for strict JSON, tagged complete-state snapshots, validation before publication, byte-fingerprint stale-write refusal, exclusive staging, flush/fsync and replacement. Roll back failed `step` and learning mutations completely; preserve unresolved staged evidence. Keep old memory, feedback, retired beliefs and pruned garden records; recompute co-occurrence idempotently. Symbolic locking retains original dream symbols and makes no encryption claim.
+
+**Validation:** focused synthetic tests in `test_large_monolith.py`, `test_large_snapshot_store.py` and `test_large_preservation.py` cover restart, original feedback chains, malformed state and injected failures, alongside all existing Sanctified regressions. The workflow compiles both maintained monoliths and runs a new disposable larger-core demonstration without optional packages. Exact candidate and hosted CPython 3.11/3.12 results belong to the repair PR. Local results alone are not hosted validation.
+
+**Release and limits:** no new stable tag or device certification. Optional physical devices/rendering/HTTP and every experimental method combination are not certified by core regression success. Whole-history snapshots scale with retained data; sequential stale detection is not a cross-process lock; directory durability is unverified; plain-data object alias identity is reconstructed by value. Direct organ mutations and explicit legacy workers are outside the transactional `step`/learning boundary. See [LARGE_MONOLITH.md](LARGE_MONOLITH.md) for the concrete API and operational limits.
+
+**Next useful work:** evaluate a bounded symbolic decision task against independently recorded outcomes, then deepen specific experimental paths with observed failures. Preserve reviewable changes and the existing prohibition on post-merge bookkeeping-only commits.
+
+## Sanctified development summary
 
 **Current goal:** make explicit, sourced experience change a later response through opt-in associative recall and bounded consolidation. Dylan approved this first learning milestone on 11 November 2026 following the comparison with HOPE/sleep learning. Target: the unreleased source prototype, with standard-library code and preserved original history.
 
