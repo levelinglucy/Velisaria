@@ -1,8 +1,8 @@
 # The larger Velisara monolith
 
-`velisara_monolith_final_fixed_empathy.py` is now a runnable repair of the larger
-symbolic system. Its dream, ritual, identity, empathy, creativity, belief and
-reflection organs remain separate and connected. The repair borrows the
+`velisara_monolith_final_fixed_empathy.py` is a self-contained, runnable version
+of the larger symbolic system. Its dream, ritual, identity, empathy, creativity,
+belief and reflection organs remain separate and connected. The repair borrows the
 maintained Sanctified implementation's explicit lifecycle, preservation rules,
 source-backed recall and failure handling.
 
@@ -13,11 +13,24 @@ certification. Current decisions and development status live in
 
 ## Run it
 
-Keep these three files in the same directory:
+Copy `velisara_monolith_final_fixed_empathy.py` to the directory where you want
+to run it. This is the only project script required for the larger headless
+program, including sourced learning and save/restart. Its learner, state codec,
+and snapshot writer are readable Python definitions inside the same file.
 
-- `velisara_monolith_final_fixed_empathy.py`
-- `velisara_runtime.py`
-- `associative_memory.py`
+The repository retains two related files for existing users and the smaller
+Sanctified program:
+
+| File | Role in the repository | Needed beside the larger monolith? |
+| --- | --- | --- |
+| `velisara_monolith_final_fixed_empathy.py` | Complete larger program and canonical snapshot/runtime definitions. | This is the file to copy and run. |
+| `velisara_runtime.py` | Compatibility facade that reexports the main file's runtime definitions for existing imports. | No. |
+| `associative_memory.py` | Separately importable learner used by Sanctified; a regression compares its executable definitions with the copy included in the larger file. | No. |
+
+Future learner edits must deliberately update both maintained copies. The parity
+check catches executable-definition drift; it does not replace behavior tests.
+Consolidating the larger program changes its packaging, while preserving the
+existing evidence and snapshot contracts.
 
 The headless core uses the Python standard library. Its supported test matrix is
 CPython 3.11 and 3.12. Optional Pythonista devices, drawing libraries and HTTP
@@ -59,6 +72,80 @@ It records one supplied observation, uses it in a later response, creates three
 recursive dream fragments, consolidates one evidence event, and verifies both
 the observation and the dream history after restart.
 
+## Read the developer notes in the source
+
+The main file starts with a developer guide and contains explanatory comments
+beside the mechanisms they describe. Search for a class or function name to
+follow a workflow; source locations will move as the program grows.
+
+| Source landmark | What to follow |
+| --- | --- |
+| `AssociativeMemory` and its helpers | Supplied observations, corrections, hypotheses, scoped recall, and consolidation. |
+| `SnapshotStore` and `ContinuityState` | Strict decoding, state encoding, validation, staging, publication, and rollback support. |
+| `VoiceOfHerOwn` through `MythosEngine` | Individual organs, their owner references, histories, and derived outputs. |
+| `SymbolicCoreMixin` | Dream, glyph, mask, memory, and reflection workflows that share the core's state. |
+| `Velisara` | Construction, organ ownership, normal turns, learning commands, snapshots, and shutdown. |
+| Later extension functions and optional adapters | Explicitly bound symbolic operations, views, HTTP commands, device sensing, and worker lifecycles. |
+| `main` | Interactive input, JSON-lines requests, and bounded command-line runs. |
+
+The comment labels distinguish implementation facts from proposed work:
+
+| Label | Meaning |
+| --- | --- |
+| `Developer note` | Purpose and mechanism of the nearby definition. |
+| `Data flow` | Inputs, state read or written, dependencies, and returned or saved artifacts. |
+| `Limit` | A current boundary, missing prerequisite, or known defective path. |
+| `Upgrade idea` | A proposal that has **not** been implemented by this documentation pass. |
+| `Check` | A useful acceptance condition for a proposed change, not a claim that a test already passed. |
+
+Some comments express these details as connected prose rather than repeating
+every label. Read the body and its callers together: a method can mutate live
+state directly even when `step()` offers rollback, and a stored `last_*` result
+can remain available after a newer invocation fails. Poetic names describe the
+symbolic interface; the notes identify when an operation is a text template,
+dictionary update, digest, device request, or actual network/file effect.
+
+### Proposed upgrade priorities
+
+The following are **unimplemented proposals**, with concrete outcomes to check.
+They preserve the nonlinear symbolic workflows while making their contracts
+easier to compose and inspect.
+
+1. **Control worker lifecycles.** Give sanctuary regeneration and environment
+   watchers retained start/stop handles, validate intervals, and keep observation
+   timestamps separate from user activity. Starting twice should leave one
+   worker; shutdown should prevent later sensor or file operations. Fold timer
+   callbacks should also reject transitions scheduled for an obsolete state.
+2. **Define shared record schemas.** Keep numeric emotion scores and text labels
+   distinct, validate dream/context/plugin records, and use stable IDs for links.
+   For example, `link_dream_to_context()` currently treats `EmotionEngine` as a
+   dictionary. A repaired path should accept an ordinary core instance and
+   preserve the captured context when later live state changes.
+3. **Track derived-index freshness.** Give soul maps, dream reflections, and
+   related views source revision IDs and explicit refresh rules. Rebuilding a
+   map should preserve separately authored stitching notes, and a view should
+   expose whether newer source records exist. Check both updates and removals;
+   a result count alone does not establish freshness. `MemoryIndex.search()`
+   already rebuilds its index on every query. Any incremental replacement should
+   match that full-rebuild result and demonstrate a measured cost improvement;
+   redundant cold-start rebuilding is an optimization target, not evidence of
+   stale search results.
+4. **Preserve provenance and complete histories.** Link generated fragments and
+   glyphs to immutable source revisions, use full digests as identifiers, and
+   treat short display glyphs as potentially colliding labels. Replace the
+   rolling extension caps described below with a complete ledger and bounded
+   views through a separately reviewed change. Adding the 51st archived dream,
+   101st journal entry, or 21st evolution note should then leave the earliest
+   source recoverable.
+5. **Measure a new learning benefit.** Define a bounded task where choosing a
+   strategy changes an independently scored outcome. Select before observing
+   the answer; compare success and cost against fixed strategies, a frozen
+   policy, and equally informed baselines on unseen cases. Recheck earlier tasks
+   after later learning. Current associative recall demonstrates retention and
+   explicit correction; improvement beyond that needs its own experiment.
+
+Current implementation and release status remain in [DEV_NOTES.md](DEV_NOTES.md).
+
 ## Use the existing organs
 
 ```python
@@ -96,9 +183,11 @@ bounded without removing the feedback connection.
 
 ## Explicit sourced learning
 
-The shared `AssociativeMemory` implementation is enabled by `learning=True` or
-`--learning`. Ordinary conversation, poems, dreams and symbolic beliefs do not
-automatically enter its factual evidence journal.
+The included `AssociativeMemory` implementation is enabled by `learning=True` or
+`--learning`; its executable definitions remain aligned with Sanctified's
+separate learner through a parity regression. Ordinary conversation, poems,
+dreams and symbolic beliefs do not automatically enter its factual evidence
+journal.
 
 ```python
 vel.learning_command({
@@ -157,6 +246,15 @@ attributes, the full event archive, preferences, dreams, feedback, belief and
 garden retirement archives, conversation, identity records, random-generator
 state, and active or dormant associative evidence.
 
+A snapshot preserves the data still present when it is taken. Three retained
+experimental extensions currently trim their own lists: `archive_dream_fragment()`
+keeps 50 entries, `journal_dream_on_idle()` keeps 100, and
+`evolve_emotional_identity()` keeps 20 evolution notes per mood. These limits
+remain in the code; consolidation and commentary have not removed them. They
+are separate from the complete core event archive and the associative evidence
+journal. Snapshotting cannot recover entries those extension methods already
+dropped unless an older saved copy contains them.
+
 Tuple keys, sets and datetimes use explicit tagged data containers. Ordinary
 dictionary keys cannot be confused with codec tags. Loading never unpickles or
 executes saved code. Runtime owner references, aliases and locks remain attached
@@ -206,6 +304,13 @@ and runs both demonstrations.
 Restoring a method's placement does not prove every possible experimental path
 through the large program. Physical sensors, sound/UI rendering, external
 reminders, HTTP serving and iPhone/Pythonista execution remain unverified.
+Some optional paths also have concrete implementation gaps: `HelpView` expects
+core methods that its view object does not supply; `VeloneSystem` refers to an
+undefined `MockVel`; and dream speech calls an undefined `speak_local` hook.
+Several late label lookups still receive numeric emotion values, and the
+dream-context link has the object/dictionary mismatch noted above. The inline
+notes identify these paths and proposed repairs; consolidation does not claim
+to complete them.
 Wall-clock time and real sensor input are not deterministic; a seed controls
 symbolic random choices and its continuation, not a byte-identical replay of
 every timestamp or external observation.
